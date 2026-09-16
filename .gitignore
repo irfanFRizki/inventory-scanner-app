@@ -1,0 +1,14 @@
+node_modules/
+
+# Folder android/ SENGAJA DI-COMMIT (bukan di-ignore) karena GitHub Actions
+# butuh proyek native ini saat checkout untuk menjalankan gradle build.
+# Yang di-ignore hanya hasil build & file rahasia:
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/release.keystore
+android/app/*.keystore
+
+*.log
+.DS_Store

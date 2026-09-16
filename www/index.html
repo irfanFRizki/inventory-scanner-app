@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Scanner Gudang</title>
+<style>
+  @font-face { font-family:'Space Mono'; src: local('Space Mono'); }
+  :root{
+    --bg:#0d0f12;
+    --panel:#15181d;
+    --panel-2:#1b1f26;
+    --line:#262b33;
+    --text:#e7ecf0;
+    --muted:#8b96a3;
+    --green:#39ff14;
+    --cyan:#00e5ff;
+    --red:#ff4d5e;
+    --amber:#ffb020;
+    --radius:14px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:'DM Sans', -apple-system, Roboto, Arial, sans-serif;
+    overscroll-behavior:none;
+  }
+  .mono{ font-family:'Space Mono', 'Courier New', monospace; }
+
+  #app{ display:flex; flex-direction:column; height:100vh; }
+
+  /* ===== Top bar ===== */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px calc(10px + env(safe-area-inset-top,0px));
+    padding-top:calc(14px + env(safe-area-inset-top,0px));
+    background:linear-gradient(180deg, var(--panel), var(--bg));
+    border-bottom:1px solid var(--line);
+  }
+  .topbar h1{
+    font-size:15px; letter-spacing:1px; margin:0; text-transform:uppercase;
+    color:var(--text);
+  }
+  .topbar h1 span{ color:var(--green); }
+  .icon-btn{
+    width:38px; height:38px; border-radius:10px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--muted); display:flex; align-items:center;
+    justify-content:center; cursor:pointer; font-size:18px;
+  }
+  .icon-btn:active{ border-color:var(--cyan); color:var(--cyan); }
+
+  /* ===== Views ===== */
+  .view{ flex:1; overflow:hidden; display:none; flex-direction:column; }
+  .view.active{ display:flex; }
+
+  /* ---- Scan view ---- */
+  #view-scan{ align-items:center; justify-content:center; padding:24px; text-align:center; gap:18px; }
+  .scan-ring{
+    width:180px; height:180px; border-radius:50%;
+    border:2px dashed var(--line);
+    display:flex; align-items:center; justify-content:center;
+    color:var(--muted); font-size:56px;
+  }
+  .scan-ring.busy{ border-color:var(--cyan); color:var(--cyan); }
+  .scan-title{ font-size:16px; color:var(--text); margin:0; }
+  .scan-sub{ font-size:13px; color:var(--muted); margin:0; max-width:280px; line-height:1.5; }
+  .btn{
+    border:none; border-radius:12px; padding:14px 22px; font-size:14px; font-weight:700;
+    cursor:pointer; letter-spacing:.3px; color:#04140a;
+    background:var(--green); box-shadow:0 0 0 1px rgba(57,255,20,.25), 0 8px 24px rgba(57,255,20,.12);
+  }
+  .btn.secondary{ background:var(--panel-2); color:var(--text); box-shadow:none; border:1px solid var(--line); }
+  .btn.ghost{ background:transparent; color:var(--cyan); border:1px solid var(--line); box-shadow:none; }
+  .btn.danger{ background:var(--red); color:#1a0506; }
+  .btn:active{ transform:scale(.97); }
+  .btn:disabled{ opacity:.5; }
+
+  .last-scan{
+    margin-top:6px; font-size:12px; color:var(--muted); max-width:300px;
+    overflow-wrap:anywhere;
+  }
+  .last-scan b{ color:var(--text); }
+
+  .history-toggle{ font-size:12px; color:var(--cyan); cursor:pointer; margin-top:2px; }
+  #historyPanel{
+    width:100%; max-width:340px; max-height:32vh; overflow-y:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:8px; display:none; text-align:left;
+  }
+  #historyPanel.show{ display:block; }
+  .hist-row{
+    display:flex; justify-content:space-between; gap:8px; padding:8px 6px;
+    border-bottom:1px solid var(--line); font-size:12px;
+  }
+  .hist-row:last-child{ border-bottom:none; }
+  .hist-code{ color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hist-time{ color:var(--muted); flex:0 0 auto; }
+
+  /* ---- Inventory view ---- */
+  #view-inv{ position:relative; }
+  #invFrame{ flex:1; width:100%; height:100%; border:none; background:#fff; }
+  .inv-toolbar{
+    display:flex; align-items:center; gap:8px; padding:8px 12px;
+    background:var(--panel); border-bottom:1px solid var(--line);
+  }
+  .inv-url{
+    flex:1; font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  .inv-loading{
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    background:var(--bg); color:var(--muted); font-size:13px; flex-direction:column; gap:10px;
+  }
+  .inv-loading.show{ display:flex; }
+  .spinner{
+    width:26px; height:26px; border-radius:50%; border:3px solid var(--line);
+    border-top-color:var(--cyan); animation:spin 0.8s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .inv-empty{
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    flex-direction:column; gap:12px; padding:24px; text-align:center; background:var(--bg);
+  }
+  .inv-empty.show{ display:flex; }
+
+  /* ===== Bottom nav ===== */
+  .bottomnav{
+    display:flex; border-top:1px solid var(--line); background:var(--panel);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  .navbtn{
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:10px 0 8px; color:var(--muted); cursor:pointer; font-size:11px;
+    border-top:2px solid transparent;
+  }
+  .navbtn .ic{ font-size:19px; }
+  .navbtn.active{ color:var(--green); border-top-color:var(--green); }
+
+  /* ===== Settings modal ===== */
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:50;
+    display:none; align-items:flex-end; justify-content:center;
+  }
+  .modal-backdrop.show{ display:flex; }
+  .modal-sheet{
+    width:100%; max-width:480px; max-height:88vh; overflow-y:auto;
+    background:var(--panel); border-radius:18px 18px 0 0; border:1px solid var(--line);
+    padding:16px 18px calc(20px + env(safe-area-inset-bottom,0px));
+  }
+  .modal-sheet h2{ font-size:16px; margin:0 0 4px; text-transform:uppercase; letter-spacing:.5px; }
+  .modal-sheet .sub{ font-size:12px; color:var(--muted); margin:0 0 16px; }
+  .field{ margin-bottom:16px; }
+  .field label{ display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .field input[type=text]{
+    width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    padding:11px 12px; color:var(--text); font-size:13px; font-family:'Space Mono', monospace;
+  }
+  .field input[type=text]:focus{ outline:none; border-color:var(--cyan); }
+  .row{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 2px; border-bottom:1px solid var(--line); }
+  .row:last-child{ border-bottom:none; }
+  .row .label{ font-size:13px; color:var(--text); }
+  .row .desc{ font-size:11px; color:var(--muted); margin-top:2px; }
+  .select{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+    color:var(--text); font-size:12px; padding:7px 8px;
+  }
+  .switch{ position:relative; width:44px; height:26px; flex:0 0 auto; }
+  .switch input{ opacity:0; width:0; height:0; }
+  .slider{
+    position:absolute; inset:0; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:26px; cursor:pointer; transition:.15s;
+  }
+  .slider:before{
+    content:""; position:absolute; width:19px; height:19px; left:2px; top:2px;
+    background:var(--muted); border-radius:50%; transition:.15s;
+  }
+  .switch input:checked + .slider{ background:rgba(57,255,20,.15); border-color:var(--green); }
+  .switch input:checked + .slider:before{ transform:translateX(18px); background:var(--green); }
+  .section-title{
+    font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--muted);
+    margin:18px 0 6px;
+  }
+  .modal-actions{ display:flex; gap:10px; margin-top:18px; }
+  .modal-actions .btn{ flex:1; }
+  .ver-line{ font-size:11px; color:var(--muted); text-align:center; margin-top:16px; }
+
+  .toast{
+    position:fixed; left:50%; bottom:96px; transform:translateX(-50%) translateY(10px);
+    background:var(--panel-2); color:var(--text); border:1px solid var(--line);
+    padding:10px 16px; border-radius:10px; font-size:12px; z-index:80; opacity:0;
+    transition:.2s; pointer-events:none; max-width:86%; text-align:center;
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  .confirm-backdrop{
+    position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:60;
+    display:none; align-items:center; justify-content:center; padding:24px;
+  }
+  .confirm-backdrop.show{ display:flex; }
+  .confirm-box{
+    width:100%; max-width:340px; background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; padding:18px;
+  }
+  .confirm-box h3{ font-size:14px; margin:0 0 8px; }
+  .confirm-box p{ font-size:12px; color:var(--muted); word-break:break-all; margin:0 0 16px; }
+  .confirm-box .row-btn{ display:flex; gap:10px; }
+  .confirm-box .row-btn .btn{ flex:1; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="topbar">
+    <h1>Scanner<span>Gudang</span></h1>
+    <div class="icon-btn" id="btnSettings" title="Pengaturan">&#9881;</div>
+  </div>
+
+  <!-- ===== Scan View ===== -->
+  <div class="view active" id="view-scan">
+    <div class="scan-ring" id="scanRing">&#128241;</div>
+    <p class="scan-title">Scan QR Lokasi / Barang</p>
+    <p class="scan-sub">Arahkan kamera ke QR code label gudang. Link dari QR akan langsung dibuka otomatis.</p>
+    <button class="btn" id="btnScan">Mulai Scan</button>
+    <div class="last-scan" id="lastScan" style="display:none;"></div>
+    <div class="history-toggle" id="btnToggleHistory">Riwayat Scan &#9662;</div>
+    <div id="historyPanel"></div>
+  </div>
+
+  <!-- ===== Inventory View ===== -->
+  <div class="view" id="view-inv">
+    <div class="inv-toolbar">
+      <div class="inv-url mono" id="invUrlLabel">-</div>
+      <div class="icon-btn" id="btnInvReload" style="width:32px;height:32px;font-size:14px;">&#8635;</div>
+    </div>
+    <div style="position:relative; flex:1;">
+      <iframe id="invFrame"></iframe>
+      <div class="inv-loading" id="invLoading"><div class="spinner"></div><div>Memuat inventory...</div></div>
+      <div class="inv-empty" id="invEmpty">
+        <div style="font-size:34px;">&#128230;</div>
+        <div style="font-size:13px; color:var(--muted); max-width:260px;">URL Script Inventory belum diatur. Buka Pengaturan untuk mengisinya.</div>
+        <button class="btn secondary" id="btnGotoSettingsFromInv">Buka Pengaturan</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottomnav">
+    <div class="navbtn active" data-view="scan"><div class="ic">&#128247;</div>Scan Code</div>
+    <div class="navbtn" data-view="inv"><div class="ic">&#128230;</div>Inventory</div>
+  </div>
+</div>
+
+<!-- ===== Settings Modal ===== -->
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal-sheet">
+    <h2>Pengaturan</h2>
+    <p class="sub">Konfigurasi link inventory dan perilaku aplikasi.</p>
+
+    <div class="field">
+      <label>URL Web App Inventory (GAS, diakhiri /exec)</label>
+      <input type="text" id="fInvUrl" placeholder="https://script.google.com/macros/s/xxxx/exec">
+    </div>
+    <div class="modal-actions" style="margin-top:-6px; margin-bottom:16px;">
+      <button class="btn secondary" id="btnResetInvUrl">Reset ke Default</button>
+      <button class="btn" id="btnSaveInvUrl">Simpan URL</button>
+    </div>
+
+    <div class="section-title">Perilaku Scan</div>
+    <div class="row">
+      <div><div class="label">Buka hasil scan di</div><div class="desc">Tempat link dari QR dibuka</div></div>
+      <select class="select" id="fOpenMode">
+        <option value="inapp">Browser Dalam App</option>
+        <option value="external">Browser Eksternal</option>
+      </select>
+    </div>
+    <div class="row">
+      <div><div class="label">Konfirmasi sebelum membuka link</div><div class="desc">Tampilkan link dulu sebelum dibuka</div></div>
+      <label class="switch"><input type="checkbox" id="fConfirmOpen"><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <div><div class="label">Getar saat scan berhasil</div><div class="desc">Feedback haptic singkat</div></div>
+      <label class="switch"><input type="checkbox" id="fVibrate"><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <div><div class="label">Hanya QR Code</div><div class="desc">Matikan untuk scan barcode 1D juga</div></div>
+      <label class="switch"><input type="checkbox" id="fQrOnly"><span class="slider"></span></label>
+    </div>
+
+    <div class="section-title">Inventory</div>
+    <div class="row">
+      <div><div class="label">Auto-refresh saat tab dibuka</div><div class="desc">Muat ulang setiap pindah ke tab Inventory</div></div>
+      <label class="switch"><input type="checkbox" id="fAutoRefresh"><span class="slider"></span></label>
+    </div>
+
+    <div class="section-title">Lainnya</div>
+    <div class="row">
+      <div><div class="label">Hapus Riwayat Scan</div><div class="desc" id="histCountLabel">0 riwayat tersimpan</div></div>
+      <button class="btn danger" style="padding:8px 14px; font-size:12px;" id="btnClearHistory">Hapus</button>
+    </div>
+    <div class="row">
+      <div><div class="label">Cek Update Aplikasi</div><div class="desc" id="verLabel">v1.0.0</div></div>
+      <button class="btn ghost" style="padding:8px 14px; font-size:12px;" id="btnCheckUpdate">Cek</button>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn" id="btnCloseSettings">Tutup</button>
+    </div>
+    <div class="ver-line">Scanner Gudang &middot; irfanFRizki</div>
+  </div>
+</div>
+
+<!-- ===== Confirm-open dialog ===== -->
+<div class="confirm-backdrop" id="confirmModal">
+  <div class="confirm-box">
+    <h3>Buka link ini?</h3>
+    <p id="confirmUrlText"></p>
+    <div class="row-btn">
+      <button class="btn secondary" id="btnConfirmCancel">Batal</button>
+      <button class="btn" id="btnConfirmOpen">Buka</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="vendor/capacitor.js"></script>
+<script src="vendor/browser.js"></script>
+<script src="vendor/preferences.js"></script>
+<script src="vendor/haptics.js"></script>
+<script src="vendor/app.js"></script>
+<script src="vendor/barcode-scanning.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

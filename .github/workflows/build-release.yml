@@ -1,0 +1,75 @@
+name: Build & Release APK
+
+# Jalan otomatis setiap kali push tag versi (mis. v1.0.0), atau bisa dipicu manual.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Ambil versi dari nama tag git (v1.2.3 -> 1.2.3), lalu suntikkan
+      # ke www/app.js supaya "Cek Update" di aplikasi tahu versi rilis ini.
+      - name: Inject APP_VERSION dari git tag
+        run: |
+          RAW_TAG="${GITHUB_REF_NAME}"
+          VERSION="${RAW_TAG#v}"
+          echo "Versi terdeteksi: $VERSION"
+          sed -i "s/var APP_VERSION = '.*';/var APP_VERSION = '${VERSION}';/" www/app.js
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Sync Capacitor -> Android
+        run: npx cap sync android
+
+      # Setup keystore signing dari GitHub Secrets. Lihat README bagian
+      # "Setup secrets" untuk cara membuat & meng-encode keystore.
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+
+      - name: Build Release APK (signed)
+        working-directory: android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.keystore \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk "out/scanner-gudang-v${APP_VERSION}.apk"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          name: "Scanner Gudang v${{ env.APP_VERSION }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
