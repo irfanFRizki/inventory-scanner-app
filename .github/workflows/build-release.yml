@@ -6,12 +6,22 @@ on:
       - 'v*'
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
+env:
+  KS_PASS: scannergudang
+  KS_ALIAS: scanner-gudang
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -24,10 +34,31 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # Build pertama: keystore dibuat di sini lalu di-commit ke repo,
+      # supaya build berikutnya memakai tanda tangan yang sama persis.
+      - name: Siapkan keystore signing
+        run: |
+          if [ ! -f ci/release.keystore ]; then
+            echo "Keystore belum ada, membuat baru..."
+            mkdir -p ci
+            keytool -genkeypair -v \
+              -keystore ci/release.keystore \
+              -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=Scanner Gudang, OU=Gudang, O=irfanFRizki, L=Jakarta, C=ID"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f ci/release.keystore
+            git commit -m "CI: buat keystore signing otomatis (sekali saja)"
+            git push origin HEAD:main
+          else
+            echo "Keystore sudah ada, dipakai ulang."
+          fi
+
       - name: Install dependencies
         run: npm install
 
-      # Tag v1.2.3 -> 1.2.3. Kalau dijalankan manual (bukan tag), pakai 0.0.0-dev.
       - name: Tentukan versi & suntikkan ke app.js
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -41,35 +72,27 @@ jobs:
           sed -i "s/var APP_VERSION = '.*';/var APP_VERSION = '${VERSION}';/" www/app.js
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
 
-      # Folder android/ tidak di-commit, jadi dibuat di sini setiap build.
       - name: Buat proyek Android & sync plugin
         run: |
           npx cap add android
           npx cap sync android
 
-      - name: Decode keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
-
       - name: Build Release APK (signed)
         working-directory: android
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=$(pwd)/app/release.keystore \
-            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/ci/release.keystore \
+            -Pandroid.injected.signing.store.password="${KS_PASS}" \
+            -Pandroid.injected.signing.key.alias="${KS_ALIAS}" \
+            -Pandroid.injected.signing.key.password="${KS_PASS}"
 
       - name: Rename APK
         run: |
           mkdir -p out
           cp android/app/build/outputs/apk/release/app-release.apk "out/scanner-gudang-v${APP_VERSION}.apk"
 
-      - name: Upload artifact (build manual)
+      - name: Upload artifact (untuk build manual)
         uses: actions/upload-artifact@v4
         with:
           name: scanner-gudang-apk
