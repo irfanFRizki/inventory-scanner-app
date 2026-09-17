@@ -1,14 +1,12 @@
 node_modules/
 
-# Folder android/ SENGAJA DI-COMMIT (bukan di-ignore) karena GitHub Actions
-# butuh proyek native ini saat checkout untuk menjalankan gradle build.
-# Yang di-ignore hanya hasil build & file rahasia:
-android/app/build/
-android/build/
-android/.gradle/
-android/local.properties
-android/app/release.keystore
-android/app/*.keystore
+# Folder android/ dibuat ulang otomatis setiap build oleh GitHub Actions
+# (npx cap add android), jadi TIDAK perlu di-commit.
+android/
+
+# Keystore signing yang di-generate & di-commit otomatis oleh CI SENGAJA
+# tidak di-ignore, supaya semua build memakai tanda tangan yang sama:
+!ci/release.keystore
 
 *.log
 .DS_Store
