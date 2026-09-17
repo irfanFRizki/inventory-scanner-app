@@ -9,7 +9,6 @@ android/.gradle/
 android/local.properties
 android/app/release.keystore
 android/app/*.keystore
-!ci/release.keystore
 
 *.log
 .DS_Store

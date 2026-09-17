@@ -6,8 +6,13 @@ Aplikasi Android 2 tab, mirip pola `xp-scanner`:
   izin kamera manual). Kalau isi QR berupa link (contoh: QR dari `barcode.txt` /
   form "Catat Barang Keluar"), link itu **langsung dibuka otomatis** (in-app
   browser atau browser eksternal, sesuai Pengaturan).
-- **Tab "Inventory"** — menampilkan Web App GAS Inventory di dalam aplikasi
-  (iframe), dengan tombol reload.
+- **Tab "Inventory"** — **UI native di dalam aplikasi** (bukan lagi iframe ke
+  Web App GAS). Menampilkan daftar stok berjalan per card lengkap dengan foto,
+  pencarian, detail stok, riwayat transaksi, serta form catat **Masuk/Keluar**
+  (bisa hitung otomatis jumlah pcs dari total timbangan memakai data kalibrasi).
+  Data diambil dari Google Sheets lewat endpoint JSONP di Apps Script, dan
+  di-cache di HP sehingga daftar terakhir tetap bisa dilihat saat offline.
+
 - **Pengaturan (ikon gear kanan atas)**:
   - Ubah URL Web App Inventory (tersimpan permanen di HP, bisa di-reset ke default)
   - Buka hasil scan di: in-app browser / browser eksternal
@@ -22,6 +27,33 @@ Semua source web app ada di `www/` (vanilla HTML/CSS/JS, tanpa framework/bundler
 — sama seperti tool-tool HTML kamu yang lain), dengan Capacitor plugin yang sudah
 disiapkan sebagai file UMD siap-pakai di `www/vendor/` (sudah diverifikasi dari
 paket npm resminya, jadi tidak perlu proses build/bundle tambahan untuk JS-nya).
+
+---
+
+## 0. Pasang endpoint API di Apps Script (wajib, sekali saja)
+
+Aplikasi tidak lagi membuka halaman GAS, tapi mengambil datanya langsung.
+Agar itu bisa jalan, project Apps Script `Card dan Plastik WH MLN lt5` perlu
+tambahan endpoint:
+
+1. Buka project Apps Script-nya.
+2. Buat file baru bernama **Api** (`Api.gs`), paste seluruh isi
+   `gas/Api.gs` dari repo ini.
+3. Di `Code.gs`, **hapus fungsi `doGet()` yang lama** (sudah digantikan oleh
+   `doGet()` di `Api.gs`, yang tetap menyajikan halaman HTML seperti biasa
+   kalau dibuka lewat browser).
+4. **Deploy > Manage deployments > edit (ikon pensil) > Version: New version >
+   Deploy.** Pastikan *Who has access* = **Anyone**.
+5. Salin URL `/exec`-nya ke aplikasi: **Pengaturan > URL API Inventory**, lalu
+   tekan **Tes Koneksi** untuk memastikan tersambung.
+
+Opsional tapi disarankan: isi Script Property `API_TOKEN`
+(*Project Settings > Script properties*) dengan kata sandi acak, lalu isi token
+yang sama di **Pengaturan > Token API** di aplikasi. Tanpa ini, siapa pun yang
+tahu URL `/exec` bisa memanggil API-nya.
+
+Endpoint yang tersedia: `stockList`, `history`, `calibrations`, `summary`,
+`hitung`, `trx`, `ping`.
 
 ---
 
@@ -148,8 +180,9 @@ inventory-scanner-app/
 ├─ capacitor.config.json
 ├─ www/
 │  ├─ index.html        # UI 2 tab + modal Settings
-│  ├─ app.js            # logic scan, inventory, preferences
+│  ├─ app.js            # logic scan, inventory native, API JSONP, preferences
 │  └─ vendor/           # Capacitor core + plugin (UMD, tanpa bundler)
+├─ gas/Api.gs           # endpoint JSONP untuk dipasang di Apps Script
 ├─ .github/workflows/build-release.yml
 └─ android/              # dibuat oleh `npx cap add android` (langkah 1)
 ```

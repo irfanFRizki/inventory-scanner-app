@@ -20,7 +20,9 @@
     vibrate: 'vibrate',
     qrOnly: 'qr_only',
     autoRefresh: 'auto_refresh_inv',
-    history: 'scan_history'
+    history: 'scan_history',
+    apiToken: 'api_token',
+    stockCache: 'stock_cache'
   };
 
   var state = {
@@ -31,7 +33,13 @@
     qrOnly: true,
     autoRefresh: true,
     history: [],
-    invLoadedOnce: false
+    apiToken: '',
+    invLoadedOnce: false,
+    stock: [],
+    stockFilter: '',
+    currentCard: null,
+    trxJenis: 'masuk',
+    trxMode: 'timbang'
   };
 
   // ================= Helpers =================
@@ -80,6 +88,8 @@
     state.qrOnly = await getPref(KEYS.qrOnly, true);
     state.autoRefresh = await getPref(KEYS.autoRefresh, true);
     state.history = await getPref(KEYS.history, []);
+    state.apiToken = await getPref(KEYS.apiToken, '');
+    state.stock = await getPref(KEYS.stockCache, []);
 
     $('fInvUrl').value = state.invUrl;
     $('fOpenMode').value = state.openMode;
@@ -87,7 +97,7 @@
     $('fVibrate').checked = !!state.vibrate;
     $('fQrOnly').checked = !!state.qrOnly;
     $('fAutoRefresh').checked = !!state.autoRefresh;
-    $('invUrlLabel').textContent = state.invUrl;
+    $('fApiToken').value = state.apiToken;
     refreshHistoryUi();
   }
 
@@ -99,10 +109,10 @@
     document.querySelector('.navbtn[data-view="' + name + '"]').classList.add('active');
 
     if (name === 'inv') {
-      if (!state.invUrl) {
-        $('invEmpty').classList.add('show');
-      } else if (!state.invLoadedOnce || state.autoRefresh) {
-        loadInventory();
+      if (!state.invLoadedOnce || state.autoRefresh) {
+        loadInventory(state.stock.length > 0);
+      } else {
+        renderInventory();
       }
     }
   }
@@ -111,30 +121,278 @@
     btn.addEventListener('click', function () { switchView(btn.dataset.view); });
   });
 
-  // ================= Inventory iframe =================
-  function loadInventory() {
-    if (!state.invUrl) {
-      $('invEmpty').classList.add('show');
-      return;
-    }
-    $('invEmpty').classList.remove('show');
-    $('invLoading').classList.add('show');
-    var frame = $('invFrame');
-    frame.onload = function () {
-      $('invLoading').classList.remove('show');
-      state.invLoadedOnce = true;
-    };
-    frame.onerror = function () {
-      $('invLoading').classList.remove('show');
-      toast('Gagal memuat inventory. Cek URL / koneksi.');
-    };
-    // cache-buster ringan supaya "reload" benar-benar minta ulang
-    var sep = state.invUrl.indexOf('?') > -1 ? '&' : '?';
-    frame.src = state.invUrl + sep + '_r=' + Date.now();
+  // ================= API JSONP ke Google Apps Script =================
+  // GAS tidak mengirim header CORS, jadi request dilakukan lewat <script>
+  // tag (JSONP) — pola yang sama seperti dipakai di xp-scanner.
+  function apiCall(params, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      if (!state.invUrl) {
+        reject(new Error('URL API Inventory belum diatur.'));
+        return;
+      }
+      var cbName = 'gascb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+      var script = document.createElement('script');
+      var done = false;
+
+      var timer = setTimeout(function () {
+        if (done) return;
+        cleanup();
+        reject(new Error('Timeout — server tidak membalas.'));
+      }, timeoutMs || 25000);
+
+      function cleanup() {
+        done = true;
+        clearTimeout(timer);
+        try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      window[cbName] = function (payload) {
+        if (done) return;
+        cleanup();
+        if (payload && payload.ok === false) reject(new Error(payload.error || 'Terjadi kesalahan di server.'));
+        else resolve(payload ? payload.data : null);
+      };
+
+      script.onerror = function () {
+        if (done) return;
+        cleanup();
+        reject(new Error('Gagal terhubung. Cek koneksi & URL API.'));
+      };
+
+      var all = Object.assign({}, params, { callback: cbName });
+      if (state.apiToken) all.token = state.apiToken;
+      var qs = Object.keys(all).map(function (k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(all[k]);
+      }).join('&');
+
+      script.src = state.invUrl + (state.invUrl.indexOf('?') > -1 ? '&' : '?') + qs;
+      document.body.appendChild(script);
+    });
   }
 
-  $('btnInvReload').addEventListener('click', loadInventory);
+  // ================= Inventory (native) =================
+  function showInvState(which) {
+    ['invLoading', 'invEmpty'].forEach(function (id) { $(id).classList.remove('show'); });
+    if (which) $(which).classList.add('show');
+  }
+
+  async function loadInventory(silent) {
+    if (!state.invUrl) {
+      $('invEmptyText').textContent = 'URL API Inventory belum diatur. Buka Pengaturan untuk mengisinya.';
+      showInvState('invEmpty');
+      return;
+    }
+    if (!silent && !state.stock.length) showInvState('invLoading');
+    $('invMeta').textContent = 'Menyegarkan data...';
+
+    try {
+      var list = await apiCall({ api: 'stockList' });
+      state.stock = Array.isArray(list) ? list : [];
+      state.invLoadedOnce = true;
+      await setPref(KEYS.stockCache, state.stock);
+      $('invMeta').textContent = state.stock.length + ' card \u00b7 diperbarui ' + fmtTime(Date.now());
+    } catch (e) {
+      $('invMeta').textContent = 'Gagal memuat' + (state.stock.length ? ' \u00b7 menampilkan data tersimpan' : '');
+      if (!state.stock.length) {
+        $('invEmptyText').textContent = e.message;
+        showInvState('invEmpty');
+        return;
+      }
+      toast(e.message);
+    }
+    renderInventory();
+  }
+
+  function renderInventory() {
+    var q = state.stockFilter.trim().toLowerCase();
+    var rows = state.stock.filter(function (r) {
+      return !q || String(r.nama).toLowerCase().indexOf(q) > -1;
+    });
+
+    if (!rows.length) {
+      $('invList').innerHTML = '';
+      $('invEmptyText').textContent = q
+        ? 'Tidak ada card yang cocok dengan pencarian.'
+        : 'Belum ada data stok di spreadsheet.';
+      showInvState('invEmpty');
+      return;
+    }
+    showInvState(null);
+
+    $('invList').innerHTML = rows.map(function (r, i) {
+      var stok = Number(r.stok) || 0;
+      var cls = stok > 0 ? '' : (stok < 0 ? 'neg' : 'zero');
+      var thumb = r.fotoUrl
+        ? '<img class="inv-thumb" src="' + escapeHtml(r.fotoUrl) + '" loading="lazy" ' +
+          'onerror="this.outerHTML=\'<div class=&quot;inv-thumb-ph&quot;>&#128196;</div>\'">'
+        : '<div class="inv-thumb-ph">&#128196;</div>';
+      return '<div class="inv-item" data-nama="' + escapeHtml(r.nama) + '">' +
+        thumb +
+        '<div class="inv-info">' +
+          '<div class="inv-name">' + escapeHtml(r.nama) + '</div>' +
+          '<div class="inv-date">' + (r.tanggalTerakhir ? escapeHtml(r.tanggalTerakhir) : 'Belum ada transaksi') + '</div>' +
+        '</div>' +
+        '<div class="inv-stok"><div class="num ' + cls + '">' + stok.toLocaleString('id-ID') + '</div>' +
+        '<div class="unit">pcs</div></div>' +
+        '</div>';
+    }).join('');
+
+    $('invList').querySelectorAll('.inv-item').forEach(function (el) {
+      el.addEventListener('click', function () { openDetail(el.dataset.nama); });
+    });
+  }
+
+  $('btnInvReload').addEventListener('click', function () { loadInventory(); });
   $('btnGotoSettingsFromInv').addEventListener('click', function () { openSettings(); });
+
+  var searchDebounce;
+  $('invSearch').addEventListener('input', function () {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(function () {
+      state.stockFilter = $('invSearch').value;
+      renderInventory();
+    }, 200);
+  });
+
+  // ---- Detail card ----
+  async function openDetail(nama) {
+    var row = state.stock.filter(function (r) { return r.nama === nama; })[0];
+    state.currentCard = row || { nama: nama, stok: 0 };
+
+    $('dtName').textContent = nama;
+    $('dtUpdated').textContent = (row && row.tanggalTerakhir) ? 'Transaksi terakhir: ' + row.tanggalTerakhir : 'Belum ada transaksi';
+    setStokReadout(state.currentCard.stok);
+    $('dtHistory').innerHTML = '<div class="muted-note">Memuat riwayat...</div>';
+    $('detailSheet').classList.add('show');
+
+    try {
+      var hist = await apiCall({ api: 'history', nama: nama });
+      renderHistory(hist || []);
+    } catch (e) {
+      $('dtHistory').innerHTML = '<div class="muted-note">Gagal memuat riwayat: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function setStokReadout(stok) {
+    stok = Number(stok) || 0;
+    var el = $('dtStok');
+    el.textContent = stok.toLocaleString('id-ID');
+    el.className = 'rvalue mono' + (stok > 0 ? '' : (stok < 0 ? ' neg' : ' zero'));
+  }
+
+  function renderHistory(hist) {
+    if (!hist.length) {
+      $('dtHistory').innerHTML = '<div class="muted-note">Belum ada transaksi untuk card ini.</div>';
+      return;
+    }
+    $('dtHistory').innerHTML = hist.map(function (h) {
+      var jenis = String(h.jenis || '').toLowerCase();
+      var cls = jenis === 'masuk' ? 'masuk' : 'keluar';
+      return '<div class="hist-item">' +
+        '<span class="hist-jenis ' + cls + '">' + escapeHtml(h.jenis) + '</span>' +
+        '<div class="hist-mid">' +
+          '<div class="hist-pcs">' + (Number(h.jumlahPcs) || 0).toLocaleString('id-ID') + ' pcs</div>' +
+          '<div class="hist-tgl">' + escapeHtml(h.tanggal || '') +
+          (h.totalTimbangan ? ' \u00b7 ' + h.totalTimbangan + ' g' : '') + '</div>' +
+        '</div></div>';
+    }).join('');
+  }
+
+  $('btnCloseDetail').addEventListener('click', function () { $('detailSheet').classList.remove('show'); });
+  $('detailSheet').addEventListener('click', function (e) {
+    if (e.target === $('detailSheet')) $('detailSheet').classList.remove('show');
+  });
+
+  // ---- Form transaksi ----
+  function openTrx(jenis) {
+    state.trxJenis = jenis;
+    $('trxTitle').textContent = jenis === 'masuk' ? 'Catat Barang Masuk' : 'Catat Barang Keluar';
+    $('trxCardName').textContent = state.currentCard ? state.currentCard.nama : '';
+    $('fTimbangan').value = '';
+    $('fPcsManual').value = '';
+    $('fPcsFinal').value = '';
+    $('calcResult').innerHTML = '';
+    setTrxMode('timbang');
+    $('trxSheet').classList.add('show');
+  }
+
+  function setTrxMode(mode) {
+    state.trxMode = mode;
+    document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) {
+      t.classList.toggle('active', t.dataset.trxmode === mode);
+    });
+    $('trxModeTimbang').style.display = mode === 'timbang' ? 'block' : 'none';
+    $('trxModeManual').style.display = mode === 'manual' ? 'block' : 'none';
+  }
+
+  document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) {
+    t.addEventListener('click', function () { setTrxMode(t.dataset.trxmode); });
+  });
+
+  $('fPcsManual').addEventListener('input', function () {
+    $('fPcsFinal').value = $('fPcsManual').value;
+  });
+
+  $('btnTrxMasuk').addEventListener('click', function () { openTrx('masuk'); });
+  $('btnTrxKeluar').addEventListener('click', function () { openTrx('keluar'); });
+  $('btnTrxCancel').addEventListener('click', function () { $('trxSheet').classList.remove('show'); });
+  $('btnCloseTrx').addEventListener('click', function () { $('trxSheet').classList.remove('show'); });
+
+  $('btnHitungPcs').addEventListener('click', async function () {
+    var g = parseFloat(String($('fTimbangan').value).replace(',', '.'));
+    if (!g || g <= 0) { toast('Isi total timbangan dulu.'); return; }
+    var btn = $('btnHitungPcs');
+    btn.disabled = true; btn.textContent = 'Menghitung...';
+    try {
+      var r = await apiCall({ api: 'hitung', nama: state.currentCard.nama, timbangan: g });
+      $('calcResult').innerHTML =
+        'Berat per pcs: <b>' + Number(r.beratPerPcs).toFixed(4) + '</b> g<br>' +
+        'Estimasi: <b>' + Number(r.jumlahPcsEstimasi).toFixed(1) + '</b> pcs<br>' +
+        'Dibulatkan (kelipatan 5): <b>' + r.jumlahPcsDibulatkan + '</b> pcs';
+      $('fPcsFinal').value = r.jumlahPcsDibulatkan;
+    } catch (e) {
+      $('calcResult').innerHTML = '<span style="color:var(--red);">' + escapeHtml(e.message) + '</span>';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Hitung Perkiraan Pcs';
+    }
+  });
+
+  $('btnTrxSave').addEventListener('click', async function () {
+    var pcs = parseFloat(String($('fPcsFinal').value).replace(',', '.'));
+    if (!pcs || pcs <= 0) { toast('Jumlah pcs harus lebih dari 0.'); return; }
+
+    var btn = $('btnTrxSave');
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    try {
+      var timbangan = parseFloat(String($('fTimbangan').value).replace(',', '.')) || 0;
+      var r = await apiCall({
+        api: 'trx',
+        nama: state.currentCard.nama,
+        jenis: state.trxJenis,
+        jumlahPcs: pcs,
+        timbangan: timbangan
+      });
+      if (state.vibrate) { try { await Haptics.vibrate({ duration: 60 }); } catch (e) {} }
+      toast('Tersimpan. Stok sekarang: ' + Number(r.stokSaatIni).toLocaleString('id-ID') + ' pcs');
+      $('trxSheet').classList.remove('show');
+
+      // perbarui angka di layar tanpa menunggu reload penuh
+      state.currentCard.stok = r.stokSaatIni;
+      setStokReadout(r.stokSaatIni);
+      state.stock.forEach(function (row) {
+        if (row.nama === state.currentCard.nama) row.stok = r.stokSaatIni;
+      });
+      await setPref(KEYS.stockCache, state.stock);
+      renderInventory();
+
+      try { renderHistory(await apiCall({ api: 'history', nama: state.currentCard.nama }) || []); } catch (e) {}
+    } catch (e) {
+      toast('Gagal menyimpan: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Simpan';
+    }
+  });
 
   // ================= History =================
   function refreshHistoryUi() {
@@ -283,19 +541,43 @@
       return;
     }
     state.invUrl = v;
+    state.apiToken = $('fApiToken').value.trim();
     await setPref(KEYS.invUrl, v);
-    $('invUrlLabel').textContent = v || '-';
+    await setPref(KEYS.apiToken, state.apiToken);
     state.invLoadedOnce = false;
-    toast('URL Inventory disimpan.');
+    toast('Pengaturan API disimpan.');
   });
 
   $('btnResetInvUrl').addEventListener('click', async function () {
     $('fInvUrl').value = DEFAULT_INV_URL;
     state.invUrl = DEFAULT_INV_URL;
     await setPref(KEYS.invUrl, DEFAULT_INV_URL);
-    $('invUrlLabel').textContent = DEFAULT_INV_URL;
     state.invLoadedOnce = false;
-    toast('URL Inventory dikembalikan ke default.');
+    toast('URL dikembalikan ke default.');
+  });
+
+  $('btnTestApi').addEventListener('click', async function () {
+    var btn = $('btnTestApi');
+    var msg = $('apiTestMsg');
+    // pakai nilai yang sedang diketik, tanpa harus disimpan dulu
+    var savedUrl = state.invUrl, savedToken = state.apiToken;
+    state.invUrl = $('fInvUrl').value.trim();
+    state.apiToken = $('fApiToken').value.trim();
+
+    btn.disabled = true;
+    msg.style.color = 'var(--muted)';
+    msg.textContent = 'Menghubungi server...';
+    try {
+      var r = await apiCall({ api: 'ping' }, 15000);
+      msg.style.color = 'var(--green)';
+      msg.textContent = 'Berhasil terhubung. Waktu server: ' + (r && r.waktu ? r.waktu : '-');
+    } catch (e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'Gagal: ' + e.message;
+      state.invUrl = savedUrl; state.apiToken = savedToken;
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   $('fOpenMode').addEventListener('change', async function () {
