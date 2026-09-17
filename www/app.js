@@ -8,41 +8,66 @@
   var App = Plugins.App;
   var BarcodeScanner = Plugins.BarcodeScanner;
 
-  // ==== Konfigurasi default ====
-  var DEFAULT_INV_URL = 'https://script.google.com/macros/s/AKfycbxMdNbDeTn3voaSImOvABiQ6wm4UX4YOF_lkCtgHv4E1yqdsExDQytAhtGXeT9mvP7Fnw/exec';
-  var APP_VERSION = '1.0.0'; // diisi otomatis oleh CI dari git tag saat build release
-  var GITHUB_REPO = 'irfanFRizki/inventory-scanner-app'; // ganti sesuai nama repo asli setelah dipush
+  // ================= Konfigurasi build-time =================
+  var APP_VERSION = '1.0.0'; // disuntik CI dari git tag saat build release
+  var GITHUB_REPO = 'irfanFRizki/inventory-scanner-app'; // untuk fitur "Cek Update"
+
+  // WAJIB diisi manual setelah membuat OAuth Client ID (tipe "Android") di
+  // Google Cloud Console — lihat README bagian "Setup Google Cloud Console".
+  // Formatnya: "xxxxxxxxxx-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.apps.googleusercontent.com"
+  // CATATAN: nilai ini dibaca juga oleh scripts/patch-android-manifest.js
+  // saat build CI untuk mendaftarkan redirect URI — jadi HARUS tetap dalam
+  // format 'GOOGLE_OAUTH_CLIENT_ID = ...'; (string literal, satu baris).
+  var GOOGLE_OAUTH_CLIENT_ID = '';
+
+  var SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+  var USERINFO_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
+  var TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
+  var AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
+  var USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo';
+  var SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
+
+  function redirectScheme() {
+    return 'com.googleusercontent.apps.' + GOOGLE_OAUTH_CLIENT_ID.replace('.apps.googleusercontent.com', '');
+  }
+  function redirectUri() {
+    return redirectScheme() + ':/oauth2redirect';
+  }
 
   var KEYS = {
-    invUrl: 'inv_url',
+    spreadsheetId: 'spreadsheet_id',
     openMode: 'open_mode',
     confirmOpen: 'confirm_open',
     vibrate: 'vibrate',
     qrOnly: 'qr_only',
     autoRefresh: 'auto_refresh_inv',
     history: 'scan_history',
-    apiToken: 'api_token',
-    stockCache: 'stock_cache'
+    stockCache: 'stock_cache',
+    oauthAccessToken: 'oauth_access_token',
+    oauthExpiresAt: 'oauth_expires_at',
+    oauthRefreshToken: 'oauth_refresh_token',
+    oauthEmail: 'oauth_email',
+    oauthPendingVerifier: 'oauth_pending_verifier'
   };
 
   var state = {
-    invUrl: DEFAULT_INV_URL,
+    spreadsheetId: '',
     openMode: 'inapp',
     confirmOpen: false,
     vibrate: true,
     qrOnly: true,
     autoRefresh: true,
     history: [],
-    apiToken: '',
     invLoadedOnce: false,
     stock: [],
     stockFilter: '',
     currentCard: null,
     trxJenis: 'masuk',
-    trxMode: 'timbang'
+    trxMode: 'timbang',
+    oauth: { accessToken: '', expiresAt: 0, refreshToken: '', email: '' }
   };
 
-  // ================= Helpers =================
+  // ================= Helpers umum =================
   function $(id) { return document.getElementById(id); }
 
   function toast(msg) {
@@ -50,12 +75,10 @@
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { t.classList.remove('show'); }, 2200);
+    toast._t = setTimeout(function () { t.classList.remove('show'); }, 2400);
   }
 
-  function isHttpUrl(str) {
-    return /^https?:\/\//i.test(String(str || '').trim());
-  }
+  function isHttpUrl(str) { return /^https?:\/\//i.test(String(str || '').trim()); }
 
   function fmtTime(ts) {
     var d = new Date(ts);
@@ -63,10 +86,25 @@
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ' ' + p(d.getDate()) + '/' + p(d.getMonth() + 1);
   }
 
+  function fmtTanggal(val) {
+    if (!val) return '';
+    var d = new Date(val);
+    if (isNaN(d.getTime())) return String(val);
+    var bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    function p(n) { return n < 10 ? '0' + n : n; }
+    return p(d.getDate()) + ' ' + bulan[d.getMonth()] + ' ' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   async function getPref(key, fallback) {
     try {
       var r = await Preferences.get({ key: key });
-      if (r && r.value !== null && r.value !== undefined) {
+      if (r && r.value !== null && r.value !== undefined && r.value !== '') {
         try { return JSON.parse(r.value); } catch (e) { return r.value; }
       }
     } catch (e) { /* ignore */ }
@@ -79,25 +117,320 @@
     } catch (e) { /* ignore */ }
   }
 
+  async function clearPref(key) {
+    try { await Preferences.remove({ key: key }); } catch (e) { /* ignore */ }
+  }
+
+  // ================= PKCE (OAuth tanpa client secret) =================
+  function base64UrlEncode(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var str = '';
+    for (var i = 0; i < bytes.byteLength; i++) str += String.fromCharCode(bytes[i]);
+    return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function randomVerifier() {
+    var arr = new Uint8Array(64);
+    (window.crypto || window.msCrypto).getRandomValues(arr);
+    return base64UrlEncode(arr.buffer).slice(0, 64);
+  }
+
+  async function pkceChallenge(verifier) {
+    var enc = new TextEncoder().encode(verifier);
+    var digest = await window.crypto.subtle.digest('SHA-256', enc);
+    return base64UrlEncode(digest);
+  }
+
+  // ================= OAuth: sign-in / sign-out / refresh =================
+  async function loadOauthState() {
+    state.oauth.accessToken = await getPref(KEYS.oauthAccessToken, '');
+    state.oauth.expiresAt = await getPref(KEYS.oauthExpiresAt, 0);
+    state.oauth.refreshToken = await getPref(KEYS.oauthRefreshToken, '');
+    state.oauth.email = await getPref(KEYS.oauthEmail, '');
+  }
+
+  function isSignedIn() { return !!state.oauth.refreshToken; }
+
+  async function beginSignIn() {
+    if (!GOOGLE_OAUTH_CLIENT_ID) {
+      toast('GOOGLE_OAUTH_CLIENT_ID belum diisi (lihat README bagian setup Google Cloud Console).');
+      return;
+    }
+    var verifier = randomVerifier();
+    var challenge = await pkceChallenge(verifier);
+    await setPref(KEYS.oauthPendingVerifier, verifier);
+
+    var params = {
+      client_id: GOOGLE_OAUTH_CLIENT_ID,
+      redirect_uri: redirectUri(),
+      response_type: 'code',
+      scope: SHEETS_SCOPE + ' ' + USERINFO_SCOPE,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      access_type: 'offline',
+      prompt: 'consent'
+    };
+    var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
+    await Browser.open({ url: AUTH_ENDPOINT + '?' + qs });
+  }
+
+  async function handleOauthRedirect(url) {
+    var codeMatch = url.match(/[?&]code=([^&]+)/);
+    var errMatch = url.match(/[?&]error=([^&]+)/);
+    try { await Browser.close(); } catch (e) { /* ignore, mungkin sudah tertutup */ }
+
+    if (errMatch) {
+      toast('Sign-in dibatalkan/gagal: ' + decodeURIComponent(errMatch[1]));
+      return;
+    }
+    if (!codeMatch) return;
+    var code = decodeURIComponent(codeMatch[1]);
+    var verifier = await getPref(KEYS.oauthPendingVerifier, '');
+    if (!verifier) { toast('Sesi sign-in kadaluarsa, coba lagi.'); return; }
+
+    try {
+      var body = {
+        code: code,
+        client_id: GOOGLE_OAUTH_CLIENT_ID,
+        redirect_uri: redirectUri(),
+        grant_type: 'authorization_code',
+        code_verifier: verifier
+      };
+      var tok = await tokenRequest(body);
+      await applyTokenResponse(tok);
+      await clearPref(KEYS.oauthPendingVerifier);
+      await fetchUserEmail();
+      toast('Berhasil masuk dengan Google.');
+      renderSignInStatus();
+    } catch (e) {
+      toast('Gagal menukar kode sign-in: ' + e.message);
+    }
+  }
+
+  async function tokenRequest(fields) {
+    var body = Object.keys(fields).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(fields[k]); }).join('&');
+    var res = await fetch(TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    });
+    var json = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(json.error_description || json.error || ('HTTP ' + res.status));
+    return json;
+  }
+
+  async function applyTokenResponse(tok) {
+    state.oauth.accessToken = tok.access_token || '';
+    state.oauth.expiresAt = Date.now() + ((Number(tok.expires_in) || 3000) - 60) * 1000;
+    if (tok.refresh_token) state.oauth.refreshToken = tok.refresh_token;
+    await setPref(KEYS.oauthAccessToken, state.oauth.accessToken);
+    await setPref(KEYS.oauthExpiresAt, state.oauth.expiresAt);
+    if (tok.refresh_token) await setPref(KEYS.oauthRefreshToken, state.oauth.refreshToken);
+  }
+
+  async function fetchUserEmail() {
+    try {
+      var res = await fetch(USERINFO_ENDPOINT, { headers: { Authorization: 'Bearer ' + state.oauth.accessToken } });
+      var j = await res.json();
+      if (j && j.email) {
+        state.oauth.email = j.email;
+        await setPref(KEYS.oauthEmail, j.email);
+      }
+    } catch (e) { /* opsional, tidak fatal */ }
+  }
+
+  async function getValidAccessToken() {
+    if (!state.oauth.refreshToken) throw new Error('Belum sign-in dengan Google. Buka Pengaturan.');
+    if (state.oauth.accessToken && Date.now() < state.oauth.expiresAt) return state.oauth.accessToken;
+    var tok = await tokenRequest({
+      grant_type: 'refresh_token',
+      refresh_token: state.oauth.refreshToken,
+      client_id: GOOGLE_OAUTH_CLIENT_ID
+    });
+    await applyTokenResponse(tok);
+    return state.oauth.accessToken;
+  }
+
+  async function signOut() {
+    var token = state.oauth.accessToken;
+    state.oauth = { accessToken: '', expiresAt: 0, refreshToken: '', email: '' };
+    await clearPref(KEYS.oauthAccessToken);
+    await clearPref(KEYS.oauthExpiresAt);
+    await clearPref(KEYS.oauthRefreshToken);
+    await clearPref(KEYS.oauthEmail);
+    if (token) {
+      fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(token)).catch(function () {});
+    }
+    renderSignInStatus();
+    toast('Keluar dari akun Google.');
+  }
+
+  function renderSignInStatus() {
+    var el = $('oauthStatus');
+    var btnIn = $('btnGoogleSignIn');
+    var btnOut = $('btnGoogleSignOut');
+    if (isSignedIn()) {
+      el.textContent = state.oauth.email ? ('Masuk sebagai ' + state.oauth.email) : 'Sudah masuk dengan Google';
+      el.style.color = 'var(--green)';
+      btnIn.style.display = 'none';
+      btnOut.style.display = 'inline-block';
+    } else {
+      el.textContent = 'Belum masuk dengan akun Google';
+      el.style.color = 'var(--muted)';
+      btnIn.style.display = 'inline-block';
+      btnOut.style.display = 'none';
+    }
+  }
+
+  App.addListener('appUrlOpen', function (data) {
+    var url = data && data.url ? data.url : '';
+    if (url.indexOf(redirectScheme()) === 0) handleOauthRedirect(url);
+  });
+
+  // ================= Google Sheets API =================
+  async function sheetsFetch(pathAndQuery, options) {
+    if (!state.spreadsheetId) throw new Error('Spreadsheet ID belum diatur.');
+    var token = await getValidAccessToken();
+    var res = await fetch(SHEETS_API + '/' + state.spreadsheetId + pathAndQuery, Object.assign({}, options, {
+      headers: Object.assign({ Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, (options && options.headers) || {})
+    }));
+    if (!res.ok) {
+      var errJson = await res.json().catch(function () { return null; });
+      var msg = (errJson && errJson.error && errJson.error.message) || ('HTTP ' + res.status);
+      var e = new Error(msg);
+      e.status = res.status;
+      throw e;
+    }
+    return res.json();
+  }
+
+  async function readRawRows(sheetName) {
+    try {
+      var data = await sheetsFetch('/values/' + encodeURIComponent(sheetName));
+      return (data.values || []).slice(1); // baris pertama = header
+    } catch (e) {
+      if (/Unable to parse range|not found|Requested entity was not found/i.test(e.message)) return [];
+      throw e;
+    }
+  }
+
+  async function ensureSheetExists(title, headerRow) {
+    var meta = await sheetsFetch('?fields=sheets.properties.title');
+    var exists = (meta.sheets || []).some(function (s) { return s.properties && s.properties.title === title; });
+    if (exists) return;
+    await sheetsFetch(':batchUpdate', {
+      method: 'POST',
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: title } } }] })
+    });
+    var lastCol = String.fromCharCode(65 + headerRow.length - 1);
+    await sheetsFetch('/values/' + encodeURIComponent(title + '!A1:' + lastCol + '1') + '?valueInputOption=RAW', {
+      method: 'PUT',
+      body: JSON.stringify({ values: [headerRow] })
+    });
+  }
+
+  // ---- Domain: stok inventory (mengikuti skema Kalibrasi_Card / Stock_Mutasi) ----
+  async function getStockList() {
+    var cal = await readRawRows('Kalibrasi_Card');
+    var stock = await readRawRows('Stock_Mutasi');
+
+    var names = {}, foto = {}, stokMap = {}, lastTgl = {};
+    cal.forEach(function (r) {
+      if (!r[0]) return;
+      names[r[0]] = true;
+      foto[r[0]] = r[6] || '';
+    });
+    stock.forEach(function (r) {
+      var nm = r[0];
+      if (!nm) return;
+      names[nm] = true;
+      var jenis = String(r[1] || '').trim().toLowerCase();
+      var jp = Number(r[2]) || 0;
+      stokMap[nm] = (stokMap[nm] || 0) + (jenis === 'masuk' ? jp : (jenis === 'keluar' ? -jp : 0));
+      var tgl = r[4];
+      if (tgl && (!lastTgl[nm] || new Date(tgl) > new Date(lastTgl[nm]))) lastTgl[nm] = tgl;
+    });
+
+    var result = Object.keys(names).map(function (nm) {
+      return {
+        nama: nm,
+        stok: stokMap[nm] || 0,
+        fotoUrl: foto[nm] || '',
+        tanggalTerakhir: lastTgl[nm] ? fmtTanggal(lastTgl[nm]) : ''
+      };
+    });
+    result.sort(function (a, b) { return a.nama.localeCompare(b.nama); });
+    return result;
+  }
+
+  async function getStockHistory(nama) {
+    var rows = await readRawRows('Stock_Mutasi');
+    var target = String(nama).trim().toLowerCase();
+    var res = rows.filter(function (r) { return String(r[0]).trim().toLowerCase() === target; })
+      .map(function (r) {
+        return {
+          jenis: r[1], jumlahPcs: Number(r[2]) || 0, totalTimbangan: Number(r[3]) || 0,
+          tanggal: r[4] ? fmtTanggal(r[4]) : '', keterangan: r[5] || '',
+          qtyPerIketKecil: (r[6] !== undefined && r[6] !== '') ? Number(r[6]) : null
+        };
+      });
+    res.reverse();
+    return res;
+  }
+
+  async function hitungPcsDariTimbangan(nama, timbanganBaru) {
+    var cal = await readRawRows('Kalibrasi_Card');
+    var target = String(nama).trim().toLowerCase();
+    var row = cal.filter(function (r) { return String(r[0]).trim().toLowerCase() === target; })[0];
+    if (!row) throw new Error('Card "' + nama + '" belum dikalibrasi (sheet Kalibrasi_Card).');
+    var beratPerPcs = Number(row[4]);
+    if (!beratPerPcs) throw new Error('Data kalibrasi card ini kosong/rusak.');
+    var estimasi = timbanganBaru / beratPerPcs;
+    return {
+      nama: row[0], beratPerPcs: beratPerPcs, jumlahPcsEstimasi: estimasi,
+      jumlahPcsDibulatkan: Math.ceil(estimasi / 5) * 5
+    };
+  }
+
+  async function saveStockTransaction(nama, jenis, jumlahPcs, timbangan, qtyIket) {
+    await ensureSheetExists('Stock_Mutasi', ['Nama Card', 'Jenis', 'Jumlah Pcs', 'Total Timbangan', 'Tanggal', 'Keterangan', 'Qty per Iket Kecil']);
+    var nowIso = new Date().toISOString();
+    await sheetsFetch('/values/' + encodeURIComponent('Stock_Mutasi') + ':append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS', {
+      method: 'POST',
+      body: JSON.stringify({ values: [[nama, jenis === 'masuk' ? 'Masuk' : 'Keluar', jumlahPcs, timbangan || 0, nowIso, '', qtyIket || '']] })
+    });
+    var hist = await getStockHistory(nama);
+    var stokSaatIni = hist.reduce(function (acc, h) {
+      var j = String(h.jenis || '').toLowerCase();
+      return acc + (j === 'masuk' ? h.jumlahPcs : (j === 'keluar' ? -h.jumlahPcs : 0));
+    }, 0);
+    return { nama: nama, jenis: jenis, jumlahPcs: jumlahPcs, stokSaatIni: stokSaatIni };
+  }
+
+  async function pingSpreadsheet() {
+    var meta = await sheetsFetch('?fields=properties.title');
+    return { waktu: fmtTanggal(new Date()), judul: (meta.properties && meta.properties.title) || '-' };
+  }
+
   // ================= Load / Save settings =================
   async function loadSettings() {
-    state.invUrl = await getPref(KEYS.invUrl, DEFAULT_INV_URL);
+    state.spreadsheetId = await getPref(KEYS.spreadsheetId, '');
     state.openMode = await getPref(KEYS.openMode, 'inapp');
     state.confirmOpen = await getPref(KEYS.confirmOpen, false);
     state.vibrate = await getPref(KEYS.vibrate, true);
     state.qrOnly = await getPref(KEYS.qrOnly, true);
     state.autoRefresh = await getPref(KEYS.autoRefresh, true);
     state.history = await getPref(KEYS.history, []);
-    state.apiToken = await getPref(KEYS.apiToken, '');
     state.stock = await getPref(KEYS.stockCache, []);
+    await loadOauthState();
 
-    $('fInvUrl').value = state.invUrl;
+    $('fSpreadsheetId').value = state.spreadsheetId;
     $('fOpenMode').value = state.openMode;
     $('fConfirmOpen').checked = !!state.confirmOpen;
     $('fVibrate').checked = !!state.vibrate;
     $('fQrOnly').checked = !!state.qrOnly;
     $('fAutoRefresh').checked = !!state.autoRefresh;
-    $('fApiToken').value = state.apiToken;
+    renderSignInStatus();
     refreshHistoryUi();
   }
 
@@ -109,67 +442,14 @@
     document.querySelector('.navbtn[data-view="' + name + '"]').classList.add('active');
 
     if (name === 'inv') {
-      if (!state.invLoadedOnce || state.autoRefresh) {
-        loadInventory(state.stock.length > 0);
-      } else {
-        renderInventory();
-      }
+      if (!state.invLoadedOnce || state.autoRefresh) loadInventory(state.stock.length > 0);
+      else renderInventory();
     }
   }
 
   document.querySelectorAll('.navbtn').forEach(function (btn) {
     btn.addEventListener('click', function () { switchView(btn.dataset.view); });
   });
-
-  // ================= API JSONP ke Google Apps Script =================
-  // GAS tidak mengirim header CORS, jadi request dilakukan lewat <script>
-  // tag (JSONP) — pola yang sama seperti dipakai di xp-scanner.
-  function apiCall(params, timeoutMs) {
-    return new Promise(function (resolve, reject) {
-      if (!state.invUrl) {
-        reject(new Error('URL API Inventory belum diatur.'));
-        return;
-      }
-      var cbName = 'gascb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
-      var script = document.createElement('script');
-      var done = false;
-
-      var timer = setTimeout(function () {
-        if (done) return;
-        cleanup();
-        reject(new Error('Timeout — server tidak membalas.'));
-      }, timeoutMs || 25000);
-
-      function cleanup() {
-        done = true;
-        clearTimeout(timer);
-        try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
-        if (script.parentNode) script.parentNode.removeChild(script);
-      }
-
-      window[cbName] = function (payload) {
-        if (done) return;
-        cleanup();
-        if (payload && payload.ok === false) reject(new Error(payload.error || 'Terjadi kesalahan di server.'));
-        else resolve(payload ? payload.data : null);
-      };
-
-      script.onerror = function () {
-        if (done) return;
-        cleanup();
-        reject(new Error('Gagal terhubung. Cek koneksi & URL API.'));
-      };
-
-      var all = Object.assign({}, params, { callback: cbName });
-      if (state.apiToken) all.token = state.apiToken;
-      var qs = Object.keys(all).map(function (k) {
-        return encodeURIComponent(k) + '=' + encodeURIComponent(all[k]);
-      }).join('&');
-
-      script.src = state.invUrl + (state.invUrl.indexOf('?') > -1 ? '&' : '?') + qs;
-      document.body.appendChild(script);
-    });
-  }
 
   // ================= Inventory (native) =================
   function showInvState(which) {
@@ -178,8 +458,13 @@
   }
 
   async function loadInventory(silent) {
-    if (!state.invUrl) {
-      $('invEmptyText').textContent = 'URL API Inventory belum diatur. Buka Pengaturan untuk mengisinya.';
+    if (!isSignedIn()) {
+      $('invEmptyText').textContent = 'Belum masuk dengan akun Google. Buka Pengaturan untuk sign-in.';
+      showInvState('invEmpty');
+      return;
+    }
+    if (!state.spreadsheetId) {
+      $('invEmptyText').textContent = 'Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.';
       showInvState('invEmpty');
       return;
     }
@@ -187,8 +472,8 @@
     $('invMeta').textContent = 'Menyegarkan data...';
 
     try {
-      var list = await apiCall({ api: 'stockList' });
-      state.stock = Array.isArray(list) ? list : [];
+      var list = await getStockList();
+      state.stock = list;
       state.invLoadedOnce = true;
       await setPref(KEYS.stockCache, state.stock);
       $('invMeta').textContent = state.stock.length + ' card \u00b7 diperbarui ' + fmtTime(Date.now());
@@ -206,36 +491,28 @@
 
   function renderInventory() {
     var q = state.stockFilter.trim().toLowerCase();
-    var rows = state.stock.filter(function (r) {
-      return !q || String(r.nama).toLowerCase().indexOf(q) > -1;
-    });
+    var rows = state.stock.filter(function (r) { return !q || String(r.nama).toLowerCase().indexOf(q) > -1; });
 
     if (!rows.length) {
       $('invList').innerHTML = '';
-      $('invEmptyText').textContent = q
-        ? 'Tidak ada card yang cocok dengan pencarian.'
-        : 'Belum ada data stok di spreadsheet.';
+      $('invEmptyText').textContent = q ? 'Tidak ada card yang cocok dengan pencarian.' : 'Belum ada data stok di spreadsheet.';
       showInvState('invEmpty');
       return;
     }
     showInvState(null);
 
-    $('invList').innerHTML = rows.map(function (r, i) {
+    $('invList').innerHTML = rows.map(function (r) {
       var stok = Number(r.stok) || 0;
       var cls = stok > 0 ? '' : (stok < 0 ? 'neg' : 'zero');
       var thumb = r.fotoUrl
         ? '<img class="inv-thumb" src="' + escapeHtml(r.fotoUrl) + '" loading="lazy" ' +
           'onerror="this.outerHTML=\'<div class=&quot;inv-thumb-ph&quot;>&#128196;</div>\'">'
         : '<div class="inv-thumb-ph">&#128196;</div>';
-      return '<div class="inv-item" data-nama="' + escapeHtml(r.nama) + '">' +
-        thumb +
-        '<div class="inv-info">' +
-          '<div class="inv-name">' + escapeHtml(r.nama) + '</div>' +
-          '<div class="inv-date">' + (r.tanggalTerakhir ? escapeHtml(r.tanggalTerakhir) : 'Belum ada transaksi') + '</div>' +
-        '</div>' +
+      return '<div class="inv-item" data-nama="' + escapeHtml(r.nama) + '">' + thumb +
+        '<div class="inv-info"><div class="inv-name">' + escapeHtml(r.nama) + '</div>' +
+        '<div class="inv-date">' + (r.tanggalTerakhir ? escapeHtml(r.tanggalTerakhir) : 'Belum ada transaksi') + '</div></div>' +
         '<div class="inv-stok"><div class="num ' + cls + '">' + stok.toLocaleString('id-ID') + '</div>' +
-        '<div class="unit">pcs</div></div>' +
-        '</div>';
+        '<div class="unit">pcs</div></div></div>';
     }).join('');
 
     $('invList').querySelectorAll('.inv-item').forEach(function (el) {
@@ -249,10 +526,7 @@
   var searchDebounce;
   $('invSearch').addEventListener('input', function () {
     clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(function () {
-      state.stockFilter = $('invSearch').value;
-      renderInventory();
-    }, 200);
+    searchDebounce = setTimeout(function () { state.stockFilter = $('invSearch').value; renderInventory(); }, 200);
   });
 
   // ---- Detail card ----
@@ -267,8 +541,7 @@
     $('detailSheet').classList.add('show');
 
     try {
-      var hist = await apiCall({ api: 'history', nama: nama });
-      renderHistory(hist || []);
+      renderHistory(await getStockHistory(nama));
     } catch (e) {
       $('dtHistory').innerHTML = '<div class="muted-note">Gagal memuat riwayat: ' + escapeHtml(e.message) + '</div>';
     }
@@ -282,58 +555,38 @@
   }
 
   function renderHistory(hist) {
-    if (!hist.length) {
-      $('dtHistory').innerHTML = '<div class="muted-note">Belum ada transaksi untuk card ini.</div>';
-      return;
-    }
+    if (!hist.length) { $('dtHistory').innerHTML = '<div class="muted-note">Belum ada transaksi untuk card ini.</div>'; return; }
     $('dtHistory').innerHTML = hist.map(function (h) {
       var jenis = String(h.jenis || '').toLowerCase();
       var cls = jenis === 'masuk' ? 'masuk' : 'keluar';
-      return '<div class="hist-item">' +
-        '<span class="hist-jenis ' + cls + '">' + escapeHtml(h.jenis) + '</span>' +
-        '<div class="hist-mid">' +
-          '<div class="hist-pcs">' + (Number(h.jumlahPcs) || 0).toLocaleString('id-ID') + ' pcs</div>' +
-          '<div class="hist-tgl">' + escapeHtml(h.tanggal || '') +
-          (h.totalTimbangan ? ' \u00b7 ' + h.totalTimbangan + ' g' : '') + '</div>' +
-        '</div></div>';
+      return '<div class="hist-item"><span class="hist-jenis ' + cls + '">' + escapeHtml(h.jenis) + '</span>' +
+        '<div class="hist-mid"><div class="hist-pcs">' + (Number(h.jumlahPcs) || 0).toLocaleString('id-ID') + ' pcs</div>' +
+        '<div class="hist-tgl">' + escapeHtml(h.tanggal || '') + (h.totalTimbangan ? ' \u00b7 ' + h.totalTimbangan + ' g' : '') + '</div></div></div>';
     }).join('');
   }
 
   $('btnCloseDetail').addEventListener('click', function () { $('detailSheet').classList.remove('show'); });
-  $('detailSheet').addEventListener('click', function (e) {
-    if (e.target === $('detailSheet')) $('detailSheet').classList.remove('show');
-  });
+  $('detailSheet').addEventListener('click', function (e) { if (e.target === $('detailSheet')) $('detailSheet').classList.remove('show'); });
 
   // ---- Form transaksi ----
   function openTrx(jenis) {
     state.trxJenis = jenis;
     $('trxTitle').textContent = jenis === 'masuk' ? 'Catat Barang Masuk' : 'Catat Barang Keluar';
     $('trxCardName').textContent = state.currentCard ? state.currentCard.nama : '';
-    $('fTimbangan').value = '';
-    $('fPcsManual').value = '';
-    $('fPcsFinal').value = '';
-    $('calcResult').innerHTML = '';
+    $('fTimbangan').value = ''; $('fPcsManual').value = ''; $('fPcsFinal').value = ''; $('calcResult').innerHTML = '';
     setTrxMode('timbang');
     $('trxSheet').classList.add('show');
   }
 
   function setTrxMode(mode) {
     state.trxMode = mode;
-    document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) {
-      t.classList.toggle('active', t.dataset.trxmode === mode);
-    });
+    document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) { t.classList.toggle('active', t.dataset.trxmode === mode); });
     $('trxModeTimbang').style.display = mode === 'timbang' ? 'block' : 'none';
     $('trxModeManual').style.display = mode === 'manual' ? 'block' : 'none';
   }
 
-  document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) {
-    t.addEventListener('click', function () { setTrxMode(t.dataset.trxmode); });
-  });
-
-  $('fPcsManual').addEventListener('input', function () {
-    $('fPcsFinal').value = $('fPcsManual').value;
-  });
-
+  document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) { t.addEventListener('click', function () { setTrxMode(t.dataset.trxmode); }); });
+  $('fPcsManual').addEventListener('input', function () { $('fPcsFinal').value = $('fPcsManual').value; });
   $('btnTrxMasuk').addEventListener('click', function () { openTrx('masuk'); });
   $('btnTrxKeluar').addEventListener('click', function () { openTrx('keluar'); });
   $('btnTrxCancel').addEventListener('click', function () { $('trxSheet').classList.remove('show'); });
@@ -345,9 +598,8 @@
     var btn = $('btnHitungPcs');
     btn.disabled = true; btn.textContent = 'Menghitung...';
     try {
-      var r = await apiCall({ api: 'hitung', nama: state.currentCard.nama, timbangan: g });
-      $('calcResult').innerHTML =
-        'Berat per pcs: <b>' + Number(r.beratPerPcs).toFixed(4) + '</b> g<br>' +
+      var r = await hitungPcsDariTimbangan(state.currentCard.nama, g);
+      $('calcResult').innerHTML = 'Berat per pcs: <b>' + Number(r.beratPerPcs).toFixed(4) + '</b> g<br>' +
         'Estimasi: <b>' + Number(r.jumlahPcsEstimasi).toFixed(1) + '</b> pcs<br>' +
         'Dibulatkan (kelipatan 5): <b>' + r.jumlahPcsDibulatkan + '</b> pcs';
       $('fPcsFinal').value = r.jumlahPcsDibulatkan;
@@ -361,32 +613,21 @@
   $('btnTrxSave').addEventListener('click', async function () {
     var pcs = parseFloat(String($('fPcsFinal').value).replace(',', '.'));
     if (!pcs || pcs <= 0) { toast('Jumlah pcs harus lebih dari 0.'); return; }
-
     var btn = $('btnTrxSave');
     btn.disabled = true; btn.textContent = 'Menyimpan...';
     try {
       var timbangan = parseFloat(String($('fTimbangan').value).replace(',', '.')) || 0;
-      var r = await apiCall({
-        api: 'trx',
-        nama: state.currentCard.nama,
-        jenis: state.trxJenis,
-        jumlahPcs: pcs,
-        timbangan: timbangan
-      });
+      var r = await saveStockTransaction(state.currentCard.nama, state.trxJenis, pcs, timbangan);
       if (state.vibrate) { try { await Haptics.vibrate({ duration: 60 }); } catch (e) {} }
       toast('Tersimpan. Stok sekarang: ' + Number(r.stokSaatIni).toLocaleString('id-ID') + ' pcs');
       $('trxSheet').classList.remove('show');
 
-      // perbarui angka di layar tanpa menunggu reload penuh
       state.currentCard.stok = r.stokSaatIni;
       setStokReadout(r.stokSaatIni);
-      state.stock.forEach(function (row) {
-        if (row.nama === state.currentCard.nama) row.stok = r.stokSaatIni;
-      });
+      state.stock.forEach(function (row) { if (row.nama === state.currentCard.nama) row.stok = r.stokSaatIni; });
       await setPref(KEYS.stockCache, state.stock);
       renderInventory();
-
-      try { renderHistory(await apiCall({ api: 'history', nama: state.currentCard.nama }) || []); } catch (e) {}
+      try { renderHistory(await getStockHistory(state.currentCard.nama)); } catch (e) {}
     } catch (e) {
       toast('Gagal menyimpan: ' + e.message);
     } finally {
@@ -394,7 +635,7 @@
     }
   });
 
-  // ================= History =================
+  // ================= History Scan =================
   function refreshHistoryUi() {
     var panel = $('historyPanel');
     if (!state.history.length) {
@@ -408,12 +649,6 @@
     $('histCountLabel').textContent = state.history.length + ' riwayat tersimpan';
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
-  }
-
   async function pushHistory(code) {
     state.history.unshift({ code: code, time: Date.now() });
     state.history = state.history.slice(0, 50);
@@ -421,10 +656,7 @@
     refreshHistoryUi();
   }
 
-  $('btnToggleHistory').addEventListener('click', function () {
-    $('historyPanel').classList.toggle('show');
-  });
-
+  $('btnToggleHistory').addEventListener('click', function () { $('historyPanel').classList.toggle('show'); });
   $('btnClearHistory').addEventListener('click', async function () {
     state.history = [];
     await setPref(KEYS.history, []);
@@ -442,7 +674,7 @@
         toast('Menyiapkan modul scanner (sekali saja)...');
         await BarcodeScanner.installGoogleBarcodeScannerModule();
       }
-    } catch (e) { /* platform lain (web/iOS) tidak butuh langkah ini */ }
+    } catch (e) { /* platform lain tidak butuh langkah ini */ }
   }
 
   async function startScan() {
@@ -456,12 +688,8 @@
       if (state.qrOnly) options.formats = ['QrCode'];
       var result = await BarcodeScanner.scan(options);
       var barcodes = (result && result.barcodes) || [];
-      if (!barcodes.length) {
-        toast('Tidak ada kode terdeteksi.');
-        return;
-      }
-      var raw = barcodes[0].rawValue || '';
-      await onScanResult(raw);
+      if (!barcodes.length) { toast('Tidak ada kode terdeteksi.'); return; }
+      await onScanResult(barcodes[0].rawValue || '');
     } catch (e) {
       var msg = (e && e.message) || String(e);
       if (!/cancel/i.test(msg)) toast('Scan dibatalkan/gagal: ' + msg);
@@ -476,48 +704,24 @@
     $('lastScan').style.display = 'block';
     $('lastScan').innerHTML = 'Terakhir: <b class="mono">' + escapeHtml(raw) + '</b>';
     await pushHistory(raw);
+    if (state.vibrate) { try { await Haptics.vibrate({ duration: 80 }); } catch (e) {} }
 
-    if (state.vibrate) {
-      try { await Haptics.vibrate({ duration: 80 }); } catch (e) { /* ignore */ }
-    }
-
-    if (!isHttpUrl(raw)) {
-      toast('Kode di-scan bukan link, tidak dibuka otomatis.');
-      return;
-    }
-
-    if (state.confirmOpen) {
-      showConfirmOpen(raw);
-    } else {
-      await openLink(raw);
-    }
+    if (!isHttpUrl(raw)) { toast('Kode di-scan bukan link, tidak dibuka otomatis.'); return; }
+    if (state.confirmOpen) showConfirmOpen(raw); else await openLink(raw);
   }
 
   async function openLink(url) {
     try {
-      if (state.openMode === 'external') {
-        window.open(url, '_system');
-      } else {
-        await Browser.open({ url: url });
-      }
-    } catch (e) {
-      toast('Gagal membuka link.');
-    }
+      if (state.openMode === 'external') window.open(url, '_system');
+      else await Browser.open({ url: url });
+    } catch (e) { toast('Gagal membuka link.'); }
   }
 
   $('btnScan').addEventListener('click', startScan);
 
-  // ================= Confirm-open dialog =================
   var pendingUrl = null;
-  function showConfirmOpen(url) {
-    pendingUrl = url;
-    $('confirmUrlText').textContent = url;
-    $('confirmModal').classList.add('show');
-  }
-  $('btnConfirmCancel').addEventListener('click', function () {
-    $('confirmModal').classList.remove('show');
-    pendingUrl = null;
-  });
+  function showConfirmOpen(url) { pendingUrl = url; $('confirmUrlText').textContent = url; $('confirmModal').classList.add('show'); }
+  $('btnConfirmCancel').addEventListener('click', function () { $('confirmModal').classList.remove('show'); pendingUrl = null; });
   $('btnConfirmOpen').addEventListener('click', async function () {
     $('confirmModal').classList.remove('show');
     if (pendingUrl) await openLink(pendingUrl);
@@ -527,85 +731,50 @@
   // ================= Settings modal =================
   function openSettings() { $('settingsModal').classList.add('show'); }
   function closeSettings() { $('settingsModal').classList.remove('show'); }
-
   $('btnSettings').addEventListener('click', openSettings);
   $('btnCloseSettings').addEventListener('click', closeSettings);
-  $('settingsModal').addEventListener('click', function (e) {
-    if (e.target === $('settingsModal')) closeSettings();
-  });
+  $('settingsModal').addEventListener('click', function (e) { if (e.target === $('settingsModal')) closeSettings(); });
 
-  $('btnSaveInvUrl').addEventListener('click', async function () {
-    var v = $('fInvUrl').value.trim();
-    if (v && !isHttpUrl(v)) {
-      toast('URL harus diawali http:// atau https://');
-      return;
-    }
-    state.invUrl = v;
-    state.apiToken = $('fApiToken').value.trim();
-    await setPref(KEYS.invUrl, v);
-    await setPref(KEYS.apiToken, state.apiToken);
-    state.invLoadedOnce = false;
-    toast('Pengaturan API disimpan.');
-  });
+  $('btnGoogleSignIn').addEventListener('click', beginSignIn);
+  $('btnGoogleSignOut').addEventListener('click', signOut);
 
-  $('btnResetInvUrl').addEventListener('click', async function () {
-    $('fInvUrl').value = DEFAULT_INV_URL;
-    state.invUrl = DEFAULT_INV_URL;
-    await setPref(KEYS.invUrl, DEFAULT_INV_URL);
+  $('btnSaveSpreadsheetId').addEventListener('click', async function () {
+    var v = $('fSpreadsheetId').value.trim();
+    state.spreadsheetId = v;
+    await setPref(KEYS.spreadsheetId, v);
     state.invLoadedOnce = false;
-    toast('URL dikembalikan ke default.');
+    toast('Spreadsheet ID disimpan.');
   });
 
   $('btnTestApi').addEventListener('click', async function () {
-    var btn = $('btnTestApi');
-    var msg = $('apiTestMsg');
-    // pakai nilai yang sedang diketik, tanpa harus disimpan dulu
-    var savedUrl = state.invUrl, savedToken = state.apiToken;
-    state.invUrl = $('fInvUrl').value.trim();
-    state.apiToken = $('fApiToken').value.trim();
-
-    btn.disabled = true;
-    msg.style.color = 'var(--muted)';
-    msg.textContent = 'Menghubungi server...';
+    var btn = $('btnTestApi'); var msg = $('apiTestMsg');
+    var savedId = state.spreadsheetId;
+    state.spreadsheetId = $('fSpreadsheetId').value.trim();
+    btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Menghubungi Google Sheets...';
     try {
-      var r = await apiCall({ api: 'ping' }, 15000);
+      if (!isSignedIn()) throw new Error('Belum sign-in Google.');
+      var r = await pingSpreadsheet();
       msg.style.color = 'var(--green)';
-      msg.textContent = 'Berhasil terhubung. Waktu server: ' + (r && r.waktu ? r.waktu : '-');
+      msg.textContent = 'Berhasil terhubung ke "' + r.judul + '".';
     } catch (e) {
       msg.style.color = 'var(--red)';
       msg.textContent = 'Gagal: ' + e.message;
-      state.invUrl = savedUrl; state.apiToken = savedToken;
+      state.spreadsheetId = savedId;
     } finally {
       btn.disabled = false;
     }
   });
 
-  $('fOpenMode').addEventListener('change', async function () {
-    state.openMode = $('fOpenMode').value;
-    await setPref(KEYS.openMode, state.openMode);
-  });
-  $('fConfirmOpen').addEventListener('change', async function () {
-    state.confirmOpen = $('fConfirmOpen').checked;
-    await setPref(KEYS.confirmOpen, state.confirmOpen);
-  });
-  $('fVibrate').addEventListener('change', async function () {
-    state.vibrate = $('fVibrate').checked;
-    await setPref(KEYS.vibrate, state.vibrate);
-  });
-  $('fQrOnly').addEventListener('change', async function () {
-    state.qrOnly = $('fQrOnly').checked;
-    await setPref(KEYS.qrOnly, state.qrOnly);
-  });
-  $('fAutoRefresh').addEventListener('change', async function () {
-    state.autoRefresh = $('fAutoRefresh').checked;
-    await setPref(KEYS.autoRefresh, state.autoRefresh);
-  });
+  $('fOpenMode').addEventListener('change', async function () { state.openMode = $('fOpenMode').value; await setPref(KEYS.openMode, state.openMode); });
+  $('fConfirmOpen').addEventListener('change', async function () { state.confirmOpen = $('fConfirmOpen').checked; await setPref(KEYS.confirmOpen, state.confirmOpen); });
+  $('fVibrate').addEventListener('change', async function () { state.vibrate = $('fVibrate').checked; await setPref(KEYS.vibrate, state.vibrate); });
+  $('fQrOnly').addEventListener('change', async function () { state.qrOnly = $('fQrOnly').checked; await setPref(KEYS.qrOnly, state.qrOnly); });
+  $('fAutoRefresh').addEventListener('change', async function () { state.autoRefresh = $('fAutoRefresh').checked; await setPref(KEYS.autoRefresh, state.autoRefresh); });
 
   // ================= Update check =================
   $('btnCheckUpdate').addEventListener('click', async function () {
     var btn = $('btnCheckUpdate');
-    btn.disabled = true;
-    btn.textContent = '...';
+    btn.disabled = true; btn.textContent = '...';
     try {
       var res = await fetch('https://api.github.com/repos/' + GITHUB_REPO + '/releases/latest');
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -620,8 +789,7 @@
     } catch (e) {
       toast('Gagal cek update. Cek koneksi internet.');
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Cek';
+      btn.disabled = false; btn.textContent = 'Cek';
     }
   });
 
@@ -630,10 +798,7 @@
     $('verLabel').textContent = 'v' + APP_VERSION;
     try {
       var info = await App.getInfo();
-      if (info && info.version) {
-        APP_VERSION = info.version;
-        $('verLabel').textContent = 'v' + APP_VERSION;
-      }
+      if (info && info.version) { APP_VERSION = info.version; $('verLabel').textContent = 'v' + APP_VERSION; }
     } catch (e) { /* web preview: getInfo tidak tersedia */ }
 
     await loadSettings();

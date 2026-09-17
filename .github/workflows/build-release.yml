@@ -81,6 +81,9 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Patch AndroidManifest.xml untuk redirect OAuth Google
+        run: node scripts/patch-android-manifest.js
+
       - name: Build Release APK (signed)
         working-directory: android
         run: |

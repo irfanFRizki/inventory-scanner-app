@@ -303,7 +303,7 @@
     <div id="historyPanel"></div>
   </div>
 
-  <!-- ===== Inventory View (native, data via JSONP dari GAS) ===== -->
+  <!-- ===== Inventory View (native, data langsung dari Google Sheets API) ===== -->
   <div class="view" id="view-inv">
     <div class="inv-toolbar">
       <input type="text" id="invSearch" class="search-input" placeholder="Cari nama card...">
@@ -408,18 +408,23 @@
     <h2>Pengaturan</h2>
     <p class="sub">Konfigurasi link inventory dan perilaku aplikasi.</p>
 
-    <div class="field">
-      <label>URL API Inventory (GAS, diakhiri /exec)</label>
-      <input type="text" id="fInvUrl" placeholder="https://script.google.com/macros/s/xxxx/exec">
+    <div class="section-title" style="margin-top:0;">Akun Google</div>
+    <div class="row">
+      <div><div class="label" id="oauthStatus">Belum masuk dengan akun Google</div>
+        <div class="desc">Dibutuhkan untuk membaca &amp; menulis data ke Spreadsheet</div></div>
+      <div>
+        <button class="btn" style="padding:8px 14px; font-size:12px;" id="btnGoogleSignIn">Masuk dgn Google</button>
+        <button class="btn danger" style="padding:8px 14px; font-size:12px; display:none;" id="btnGoogleSignOut">Keluar</button>
+      </div>
     </div>
-    <div class="field">
-      <label>Token API (opsional, samakan dgn Script Property API_TOKEN)</label>
-      <input type="text" id="fApiToken" placeholder="kosongkan jika tidak dipakai">
+
+    <div class="field" style="margin-top:16px;">
+      <label>Spreadsheet ID (dari URL Google Sheets)</label>
+      <input type="text" id="fSpreadsheetId" placeholder="mis. 1AbCDefGhIjKLmNoPQRstuVWxyz1234567890">
     </div>
     <div class="modal-actions" style="margin-top:-6px;">
-      <button class="btn secondary" id="btnResetInvUrl">Reset Default</button>
       <button class="btn ghost" id="btnTestApi">Tes Koneksi</button>
-      <button class="btn" id="btnSaveInvUrl">Simpan</button>
+      <button class="btn" id="btnSaveSpreadsheetId">Simpan</button>
     </div>
     <div id="apiTestMsg" style="font-size:11px; color:var(--muted); margin-top:8px; min-height:14px;"></div>
 
@@ -446,7 +451,7 @@
 
     <div class="section-title">Inventory</div>
     <div class="row">
-      <div><div class="label">Auto-refresh saat tab dibuka</div><div class="desc">Ambil data stok terbaru tiap buka tab Inventory</div></div>
+      <div><div class="label">Auto-refresh saat tab dibuka</div><div class="desc">Ambil data terbaru dari Sheets tiap buka tab Inventory</div></div>
       <label class="switch"><input type="checkbox" id="fAutoRefresh"><span class="slider"></span></label>
     </div>
 
