@@ -81,6 +81,18 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      # `npx cap add android` SELALU menulis versionName "1.0" / versionCode 1
+      # di android/app/build.gradle, apa pun tag git-nya — langkah "Tentukan versi"
+      # di atas cuma menyuntik www/app.js, tidak pernah menyentuh file ini. Karena
+      # init() di app.js mengganti APP_VERSION dengan App.getInfo().version (versi
+      # native, bukan variabel JS), yang tampil di UI selalu "1.0" biarpun tag-nya
+      # sudah v2.1.x. Ini yang membuat versi di aplikasi tidak pernah berubah.
+      - name: Set versionName & versionCode Android sesuai tag
+        run: |
+          sed -i "s/versionName \"1.0\"/versionName \"${APP_VERSION}\"/" android/app/build.gradle
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
       - name: Patch AndroidManifest.xml untuk redirect OAuth Google
         run: node scripts/patch-android-manifest.js
 
