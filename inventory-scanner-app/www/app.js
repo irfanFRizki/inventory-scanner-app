@@ -307,7 +307,13 @@
 
   async function readRawRows(sheetName) {
     try {
-      var data = await sheetsFetch('/values/' + encodeURIComponent(sheetName));
+      // valueRenderOption=UNFORMATTED_VALUE: paksa angka balik sebagai number
+      // JS asli, bukan string terformat sesuai locale sheet (mis. "3,2005"
+      // ala Indonesia) yang bikin Number()/parseFloat() gagal jadi NaN.
+      // dateTimeRenderOption=FORMATTED_STRING: kolom tanggal tetap dapat
+      // string yang bisa diparse Date(), bukan serial number Sheets.
+      var data = await sheetsFetch('/values/' + encodeURIComponent(sheetName) +
+        '?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING');
       return (data.values || []).slice(1); // baris pertama = header
     } catch (e) {
       if (/Unable to parse range|not found|Requested entity was not found/i.test(e.message)) return [];
