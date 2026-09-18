@@ -132,7 +132,7 @@
   /* ---- Grid katalog: foto besar, 2 kolom di HP ---- */
   .catalog-grid{
     height:100%; overflow-y:auto; padding:12px;
-    display:grid; grid-template-columns:repeat(2, 1fr); gap:12px;
+    display:grid; grid-template-columns:repeat(2, 1fr); grid-auto-rows:min-content; gap:12px;
   }
   @media (min-width:640px){ .catalog-grid{ grid-template-columns:repeat(4, 1fr); } }
   @media (min-width:960px){ .catalog-grid{ grid-template-columns:repeat(6, 1fr); } }
