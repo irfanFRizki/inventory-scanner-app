@@ -383,12 +383,31 @@
     var cal = await readRawRows('Kalibrasi_Card');
     var target = String(nama).trim().toLowerCase();
     var row = cal.filter(function (r) { return String(r[0]).trim().toLowerCase() === target; })[0];
-    if (!row) throw new Error('Card "' + nama + '" belum dikalibrasi (sheet Kalibrasi_Card).');
-    var beratPerPcs = Number(row[4]);
-    if (!beratPerPcs) throw new Error('Data kalibrasi card ini kosong/rusak.');
+    var beratPerPcs = row ? (Number(row[4]) || 0) : 0;
+
+    if (!beratPerPcs) {
+      // Ringkasan di Kalibrasi_Card kosong/rusak (atau card belum sempat
+      // ter-upsert ke sana) — hitung ulang langsung dari data mentah di
+      // Kalibrasi_Parts (Nama Card, Part Ke, Jumlah Pcs, Total Timbangan,
+      // Tanggal), lebih tahan karena tidak bergantung ke ringkasan cache.
+      var fallback = await getCalibrationPartsFor(nama);
+      var totalPcs = 0, totalTimbangan = 0;
+      fallback.parts.forEach(function (p) {
+        totalPcs += Number(p.jumlahPcs) || 0;
+        totalTimbangan += Number(p.totalTimbangan) || 0;
+      });
+      if (totalPcs > 0 && totalTimbangan > 0) beratPerPcs = totalTimbangan / totalPcs;
+    }
+
+    if (!beratPerPcs) {
+      throw new Error(row
+        ? 'Data kalibrasi card ini kosong/rusak di Kalibrasi_Card maupun Kalibrasi_Parts.'
+        : 'Card "' + nama + '" belum dikalibrasi (tidak ada di Kalibrasi_Card maupun Kalibrasi_Parts).');
+    }
+
     var estimasi = timbanganBaru / beratPerPcs;
     return {
-      nama: row[0], beratPerPcs: beratPerPcs, jumlahPcsEstimasi: estimasi,
+      nama: (row && row[0]) || nama, beratPerPcs: beratPerPcs, jumlahPcsEstimasi: estimasi,
       jumlahPcsDibulatkan: Math.ceil(estimasi / 5) * 5
     };
   }
@@ -669,7 +688,6 @@
   document.querySelectorAll('.subtab[data-trxmode]').forEach(function (t) { t.addEventListener('click', function () { setTrxMode(t.dataset.trxmode); }); });
   $('fPcsManual').addEventListener('input', function () { $('fPcsFinal').value = $('fPcsManual').value; });
   $('btnTrxMasuk').addEventListener('click', function () { openTrx('masuk'); });
-  $('btnTrxKeluar').addEventListener('click', function () { openTrx('keluar'); });
   $('btnTrxCancel').addEventListener('click', function () { $('trxSheet').classList.remove('show'); });
   $('btnCloseTrx').addEventListener('click', function () { $('trxSheet').classList.remove('show'); });
 
