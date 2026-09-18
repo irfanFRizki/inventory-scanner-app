@@ -642,7 +642,7 @@
       var cls = jenis === 'masuk' ? 'masuk' : 'keluar';
       return '<div class="hist-item"><span class="hist-jenis ' + cls + '">' + escapeHtml(h.jenis) + '</span>' +
         '<div class="hist-mid"><div class="hist-pcs">' + (Number(h.jumlahPcs) || 0).toLocaleString('id-ID') + ' pcs</div>' +
-        '<div class="hist-tgl">' + escapeHtml(h.tanggal || '') + (h.totalTimbangan ? ' \u00b7 ' + h.totalTimbangan + ' g' : '') + '</div></div></div>';
+        '<div class="hist-tgl">' + escapeHtml(h.tanggal || '') + (h.totalTimbangan ? ' \u00b7 ' + h.totalTimbangan + ' kg' : '') + '</div></div></div>';
     }).join('');
   }
 
@@ -680,7 +680,7 @@
     btn.disabled = true; btn.textContent = 'Menghitung...';
     try {
       var r = await hitungPcsDariTimbangan(state.currentCard.nama, g);
-      $('calcResult').innerHTML = 'Berat per pcs: <b>' + Number(r.beratPerPcs).toFixed(4) + '</b> g<br>' +
+      $('calcResult').innerHTML = 'Berat per pcs: <b>' + Number(r.beratPerPcs).toFixed(6) + '</b> kg<br>' +
         'Estimasi: <b>' + Number(r.jumlahPcsEstimasi).toFixed(1) + '</b> pcs<br>' +
         'Dibulatkan (kelipatan 5): <b>' + r.jumlahPcsDibulatkan + '</b> pcs';
       $('fPcsFinal').value = r.jumlahPcsDibulatkan;
@@ -852,6 +852,190 @@
   $('fQrOnly').addEventListener('change', async function () { state.qrOnly = $('fQrOnly').checked; await setPref(KEYS.qrOnly, state.qrOnly); });
   $('fAutoRefresh').addEventListener('change', async function () { state.autoRefresh = $('fAutoRefresh').checked; await setPref(KEYS.autoRefresh, state.autoRefresh); });
 
+  // ================= Kalibrasi: baca/tulis ke Sheets =================
+  async function rewriteSheetRows(sheetName, headerRow, dataRows) {
+    // Sheets API tidak punya "hapus baris berdasarkan nilai" yang simpel lewat
+    // HTTP, jadi seluruh sheet ditulis ulang: bersihkan dulu, lalu tulis
+    // header + data terbaru dari A1. Aman untuk ukuran data card gudang.
+    await sheetsFetch('/values/' + encodeURIComponent(sheetName) + ':clear', { method: 'POST' });
+    var all = [headerRow].concat(dataRows);
+    await sheetsFetch('/values/' + encodeURIComponent(sheetName) + '?valueInputOption=USER_ENTERED', {
+      method: 'PUT',
+      body: JSON.stringify({ values: all })
+    });
+  }
+
+  async function getCalibrationPartsFor(nama) {
+    var target = String(nama).trim().toLowerCase();
+    var rows = await readRawRows('Kalibrasi_Parts');
+    var parts = rows.filter(function (r) { return String(r[0]).trim().toLowerCase() === target; })
+      .map(function (r) { return { jumlahPcs: Number(r[2]), totalTimbangan: Number(r[3]) }; });
+
+    var qtyIket = null;
+    var cardRows = await readRawRows('Kalibrasi_Card');
+    var found = cardRows.filter(function (r) { return String(r[0]).trim().toLowerCase() === target; })[0];
+    if (found && found[7] !== undefined && found[7] !== '' && found[7] !== null) qtyIket = Number(found[7]);
+    return { parts: parts, qtyPerIketKecil: qtyIket };
+  }
+
+  async function saveCalibrationToSheets(nama, parts, qtyIket) {
+    await ensureSheetExists('Kalibrasi_Parts', ['Nama Card', 'Part Ke', 'Jumlah Pcs', 'Total Timbangan', 'Tanggal']);
+    await ensureSheetExists('Kalibrasi_Card', ['Nama Card', 'Jumlah Part', 'Total Pcs Gabungan', 'Total Timbangan Gabungan', 'Berat per Pcs', 'Tanggal Update', 'Foto URL', 'Qty per Iket Kecil']);
+
+    var target = nama.trim().toLowerCase();
+    var nowIso = new Date().toISOString();
+
+    // --- Kalibrasi_Parts: ganti semua part lama milik nama ini dengan gabungan baru ---
+    var oldParts = await readRawRows('Kalibrasi_Parts');
+    var keepParts = oldParts.filter(function (r) { return String(r[0]).trim().toLowerCase() !== target; });
+    var newPartRows = parts.map(function (p, idx) { return [nama, idx + 1, p.jumlahPcs, p.totalTimbangan, nowIso]; });
+    await rewriteSheetRows('Kalibrasi_Parts', ['Nama Card', 'Part Ke', 'Jumlah Pcs', 'Total Timbangan', 'Tanggal'], keepParts.concat(newPartRows));
+
+    // --- Kalibrasi_Card: upsert baris ringkasan ---
+    var totalPcs = 0, totalTimbangan = 0;
+    parts.forEach(function (p) { totalPcs += p.jumlahPcs; totalTimbangan += p.totalTimbangan; });
+    var beratPerPcs = totalTimbangan / totalPcs;
+
+    var cardRows = await readRawRows('Kalibrasi_Card');
+    var existingIdx = -1, existingFoto = '';
+    cardRows.forEach(function (r, i) {
+      if (String(r[0]).trim().toLowerCase() === target) { existingIdx = i; existingFoto = r[6] || ''; }
+    });
+    var summaryRow = [nama, parts.length, totalPcs, totalTimbangan, beratPerPcs, nowIso, existingFoto,
+      (qtyIket !== null && qtyIket !== undefined) ? qtyIket : ''];
+    var updated = existingIdx > -1;
+    if (updated) cardRows[existingIdx] = summaryRow; else cardRows.push(summaryRow);
+    await rewriteSheetRows('Kalibrasi_Card', ['Nama Card', 'Jumlah Part', 'Total Pcs Gabungan', 'Total Timbangan Gabungan', 'Berat per Pcs', 'Tanggal Update', 'Foto URL', 'Qty per Iket Kecil'], cardRows);
+
+    return { nama: nama, updated: updated, jumlahPart: parts.length, beratPerPcs: beratPerPcs };
+  }
+
+  // ================= Kalibrasi: UI (part rows, preview, simpan) =================
+  var kPartCounter = 0;
+  var kLastLoadedNama = '';
+
+  function addPartRow(prefill) {
+    kPartCounter++;
+    var div = document.createElement('div');
+    div.className = 'part-row';
+    div.innerHTML =
+      '<div class="field"><label>Part &mdash; jumlah pcs</label>' +
+      '<input type="text" inputmode="decimal" class="kp-jumlah" placeholder="mis. 100"></div>' +
+      '<div class="field"><label>Total timbangan (kg)</label>' +
+      '<input type="text" inputmode="decimal" class="kp-total" placeholder="mis. 0.345"></div>' +
+      '<button type="button" class="part-remove" title="Hapus part ini">&times;</button>';
+    $('kParts').appendChild(div);
+    var jInput = div.querySelector('.kp-jumlah');
+    var tInput = div.querySelector('.kp-total');
+    if (prefill) { jInput.value = prefill.jumlahPcs; tInput.value = prefill.totalTimbangan; }
+    jInput.addEventListener('input', updateKalibrasiPreview);
+    tInput.addEventListener('input', updateKalibrasiPreview);
+    div.querySelector('.part-remove').addEventListener('click', function () {
+      div.remove();
+      renumberParts();
+      updateKalibrasiPreview();
+    });
+    renumberParts();
+    updateKalibrasiPreview();
+  }
+
+  function renumberParts() {
+    $('kParts').querySelectorAll('.part-row').forEach(function (row, idx) {
+      row.querySelector('label').textContent = 'Part ' + (idx + 1) + ' \u2014 jumlah pcs';
+    });
+  }
+
+  function resetKalibrasiParts(prefillList) {
+    $('kParts').innerHTML = '';
+    kPartCounter = 0;
+    if (prefillList && prefillList.length) prefillList.forEach(function (p) { addPartRow(p); });
+    else addPartRow(null);
+  }
+
+  $('kAddPart').addEventListener('click', function () { addPartRow(null); });
+
+  function readKalibrasiParts() {
+    var parts = [];
+    $('kParts').querySelectorAll('.part-row').forEach(function (row) {
+      var j = parseFloat(String(row.querySelector('.kp-jumlah').value).replace(',', '.'));
+      var t = parseFloat(String(row.querySelector('.kp-total').value).replace(',', '.'));
+      if (j > 0 && t > 0) parts.push({ jumlahPcs: j, totalTimbangan: t });
+    });
+    return parts;
+  }
+
+  function updateKalibrasiPreview() {
+    var parts = readKalibrasiParts();
+    if (!parts.length) {
+      $('kRvalue').textContent = '\u2014';
+      $('kRdetail').textContent = 'kg / pcs';
+      $('kReadout').classList.add('muted');
+      return;
+    }
+    var totalPcs = 0, totalTimbangan = 0;
+    parts.forEach(function (p) { totalPcs += p.jumlahPcs; totalTimbangan += p.totalTimbangan; });
+    var berat = totalTimbangan / totalPcs;
+    $('kRvalue').textContent = berat.toFixed(6);
+    $('kRdetail').textContent = 'kg / pcs \u00b7 ' + parts.length + ' part \u00b7 ' + totalPcs + ' pcs total';
+    $('kReadout').classList.remove('muted');
+  }
+
+  var kNameDebounce;
+  $('kNama').addEventListener('input', function () {
+    clearTimeout(kNameDebounce);
+    var val = $('kNama').value.trim();
+    kNameDebounce = setTimeout(async function () {
+      if (!val) { $('kLoadNote').style.display = 'none'; return; }
+      if (val.toLowerCase() === kLastLoadedNama.toLowerCase()) return;
+      if (!isSignedIn() || !state.spreadsheetId) return;
+      try {
+        var data = await getCalibrationPartsFor(val);
+        if (data.parts.length) {
+          kLastLoadedNama = val;
+          resetKalibrasiParts(data.parts);
+          $('kQtyIket').value = (data.qtyPerIketKecil !== null && data.qtyPerIketKecil !== undefined) ? data.qtyPerIketKecil : '';
+          $('kLoadNote').textContent = 'Card ini sudah punya ' + data.parts.length + ' part sebelumnya \u2014 dimuat otomatis, tinggal tambah part baru lalu Simpan.';
+          $('kLoadNote').style.display = 'block';
+        } else {
+          kLastLoadedNama = '';
+          $('kLoadNote').style.display = 'none';
+        }
+      } catch (e) { /* diam saja — bukan blocking utk pengisian form */ }
+    }, 400);
+  });
+
+  $('kSave').addEventListener('click', async function () {
+    var btn = $('kSave');
+    var nama = $('kNama').value.trim();
+    var parts = readKalibrasiParts();
+    var qtyRaw = parseFloat(String($('kQtyIket').value).replace(',', '.'));
+    var qtyIket = (qtyRaw > 0) ? qtyRaw : null;
+
+    $('kMsg').textContent = ''; $('kMsg').className = 'kal-msg';
+    if (!nama) { $('kMsg').textContent = 'Nama card wajib diisi.'; $('kMsg').className = 'kal-msg err'; return; }
+    if (!parts.length) { $('kMsg').textContent = 'Isi minimal 1 part (jumlah pcs & total timbangan).'; $('kMsg').className = 'kal-msg err'; return; }
+    if (!isSignedIn()) { $('kMsg').textContent = 'Belum sign-in Google. Buka Pengaturan.'; $('kMsg').className = 'kal-msg err'; return; }
+    if (!state.spreadsheetId) { $('kMsg').textContent = 'Spreadsheet ID belum diatur. Buka Pengaturan.'; $('kMsg').className = 'kal-msg err'; return; }
+
+    btn.disabled = true; btn.textContent = 'Menyimpan...';
+    try {
+      var res = await saveCalibrationToSheets(nama, parts, qtyIket);
+      $('kMsg').className = 'kal-msg ok';
+      $('kMsg').innerHTML = (res.updated ? 'Kalibrasi "' + escapeHtml(res.nama) + '" diperbarui \u2014 ' : 'Kalibrasi "' + escapeHtml(res.nama) + '" disimpan \u2014 ') +
+        res.jumlahPart + ' part, berat per pcs gabungan: <b>' + res.beratPerPcs.toFixed(6) + ' kg</b>.';
+      $('kNama').value = ''; $('kQtyIket').value = '';
+      kLastLoadedNama = '';
+      $('kLoadNote').style.display = 'none';
+      resetKalibrasiParts(null);
+      state.invLoadedOnce = false; // biar tab Inventory tarik ulang, card baru ikut muncul
+    } catch (e) {
+      $('kMsg').className = 'kal-msg err';
+      $('kMsg').textContent = e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Simpan Kalibrasi';
+    }
+  });
+
   // ================= Update check =================
   $('btnCheckUpdate').addEventListener('click', async function () {
     var btn = $('btnCheckUpdate');
@@ -883,6 +1067,7 @@
     } catch (e) { /* web preview: getInfo tidak tersedia */ }
 
     await loadSettings();
+    resetKalibrasiParts(null);
     switchView('scan');
   }
 
