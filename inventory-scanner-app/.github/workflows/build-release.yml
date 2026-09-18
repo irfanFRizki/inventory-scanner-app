@@ -1,0 +1,116 @@
+name: Build & Release APK
+
+# Jalan saat push tag versi (v1.0.0, dst) atau dipicu manual dari tab Actions.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  KS_PASS: scannergudang
+  KS_ALIAS: scanner-gudang
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Build pertama: keystore dibuat di sini lalu di-commit ke repo,
+      # supaya build berikutnya memakai tanda tangan yang sama persis
+      # (penting agar update APK bisa menimpa versi lama tanpa uninstall).
+      - name: Siapkan keystore signing
+        run: |
+          if [ ! -f ci/release.keystore ]; then
+            echo "Keystore belum ada, membuat baru..."
+            mkdir -p ci
+            keytool -genkeypair -v \
+              -keystore ci/release.keystore \
+              -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=Scanner Gudang, OU=Gudang, O=irfanFRizki, L=Jakarta, C=ID"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f ci/release.keystore
+            git commit -m "CI: buat keystore signing otomatis (sekali saja)"
+            git push origin HEAD:main
+          else
+            echo "Keystore sudah ada, dipakai ulang."
+          fi
+
+      # Bukan "npm ci" — project ini belum punya package-lock.json.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Tentukan versi & suntikkan ke app.js
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "IS_RELEASE=true" >> $GITHUB_ENV
+          else
+            VERSION="0.0.0-dev"
+            echo "IS_RELEASE=false" >> $GITHUB_ENV
+          fi
+          echo "Versi: $VERSION"
+          sed -i "s/var APP_VERSION = '.*';/var APP_VERSION = '${VERSION}';/" www/app.js
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+
+      # Folder android/ tidak di-commit, jadi dibuat ulang di setiap build.
+      - name: Buat proyek Android & sync plugin
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Patch AndroidManifest.xml untuk redirect OAuth Google
+        run: node scripts/patch-android-manifest.js
+
+      - name: Build Release APK (signed)
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/ci/release.keystore \
+            -Pandroid.injected.signing.store.password="${KS_PASS}" \
+            -Pandroid.injected.signing.key.alias="${KS_ALIAS}" \
+            -Pandroid.injected.signing.key.password="${KS_PASS}"
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk "out/scanner-gudang-v${APP_VERSION}.apk"
+
+      - name: Upload artifact (untuk build manual)
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-gudang-apk
+          path: out/*.apk
+
+      - name: Create GitHub Release
+        if: env.IS_RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          name: "Scanner Gudang v${{ env.APP_VERSION }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,12 @@
+{
+  "appId": "com.irfan.invscanner",
+  "appName": "Scanner Gudang",
+  "webDir": "www",
+  "backgroundColor": "#0d0f12",
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "BarcodeScanner": {}
+  }
+}

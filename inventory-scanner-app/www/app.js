@@ -18,7 +18,7 @@
   // CATATAN: nilai ini dibaca juga oleh scripts/patch-android-manifest.js
   // saat build CI untuk mendaftarkan redirect URI — jadi HARUS tetap dalam
   // format 'GOOGLE_OAUTH_CLIENT_ID = ...'; (string literal, satu baris).
-  var GOOGLE_OAUTH_CLIENT_ID = '250943179443-0onrfglhn814v2fck81qmqf4cd76es80.apps.googleusercontent.com';
+  var GOOGLE_OAUTH_CLIENT_ID = '';
 
   var SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
   var USERINFO_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
