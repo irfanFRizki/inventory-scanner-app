@@ -169,7 +169,10 @@
       code_challenge: challenge,
       code_challenge_method: 'S256',
       access_type: 'offline',
-      prompt: 'consent'
+      prompt: 'consent',
+      // Force a new refresh token on re-authentication, including when the
+      // account still has an old grant from a previous installation.
+      include_granted_scopes: 'true'
     };
     var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
     await Browser.open({ url: AUTH_ENDPOINT + '?' + qs });
@@ -216,7 +219,11 @@
       body: body
     });
     var json = await res.json().catch(function () { return {}; });
-    if (!res.ok) throw new Error(json.error_description || json.error || ('HTTP ' + res.status));
+    if (!res.ok) {
+      var err = new Error(json.error_description || json.error || ('HTTP ' + res.status));
+      err.oauthError = json.error || '';
+      throw err;
+    }
     return json;
   }
 
@@ -243,11 +250,28 @@
   async function getValidAccessToken() {
     if (!state.oauth.refreshToken) throw new Error('Belum sign-in dengan Google. Buka Pengaturan.');
     if (state.oauth.accessToken && Date.now() < state.oauth.expiresAt) return state.oauth.accessToken;
-    var tok = await tokenRequest({
-      grant_type: 'refresh_token',
-      refresh_token: state.oauth.refreshToken,
-      client_id: GOOGLE_OAUTH_CLIENT_ID
-    });
+    var tok;
+    try {
+      tok = await tokenRequest({
+        grant_type: 'refresh_token',
+        refresh_token: state.oauth.refreshToken,
+        client_id: GOOGLE_OAUTH_CLIENT_ID
+      });
+    } catch (e) {
+      // Google returns invalid_grant when a refresh token has expired or been
+      // revoked. Do not keep presenting the app as signed in with unusable
+      // credentials; clear only OAuth state and ask the user to sign in again.
+      if (e.oauthError === 'invalid_grant') {
+        state.oauth = { accessToken: '', expiresAt: 0, refreshToken: '', email: '' };
+        await clearPref(KEYS.oauthAccessToken);
+        await clearPref(KEYS.oauthExpiresAt);
+        await clearPref(KEYS.oauthRefreshToken);
+        await clearPref(KEYS.oauthEmail);
+        renderSignInStatus();
+        throw new Error('Sesi Google sudah kedaluwarsa atau dicabut. Masuk kembali lewat Pengaturan → Masuk dengan Google.');
+      }
+      throw e;
+    }
     await applyTokenResponse(tok);
     return state.oauth.accessToken;
   }
@@ -289,12 +313,18 @@
   });
 
   // ================= Google Sheets API =================
-  async function sheetsFetch(pathAndQuery, options) {
+  async function sheetsFetch(pathAndQuery, options, retried) {
     if (!state.spreadsheetId) throw new Error('Spreadsheet ID belum diatur.');
     var token = await getValidAccessToken();
     var res = await fetch(SHEETS_API + '/' + state.spreadsheetId + pathAndQuery, Object.assign({}, options, {
       headers: Object.assign({ Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, (options && options.headers) || {})
     }));
+    if (res.status === 401 && !retried) {
+      // Access token sudah ditolak server tapi cache expiresAt masih menganggap
+      // valid (mis. jam perangkat bergeser). Paksa refresh lalu ulangi sekali.
+      state.oauth.expiresAt = 0;
+      return sheetsFetch(pathAndQuery, options, true);
+    }
     if (!res.ok) {
       var errJson = await res.json().catch(function () { return null; });
       var msg = (errJson && errJson.error && errJson.error.message) || ('HTTP ' + res.status);
