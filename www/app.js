@@ -11,6 +11,7 @@
   // ================= Konfigurasi build-time =================
   var APP_VERSION = '1.0.0'; // disuntik CI dari git tag saat build release
   var GITHUB_REPO = 'irfanFRizki/inventory-scanner-app'; // untuk fitur "Cek Update"
+  var LIMIT_STOCK = 1000; // batas alarm stock hampir habis (pcs) sesuai rekap_stock.py
 
   // WAJIB diisi manual setelah membuat OAuth Client ID (tipe "Android") di
   // Google Cloud Console — lihat README bagian "Setup Google Cloud Console".
@@ -50,6 +51,7 @@
     oauthPendingVerifier: 'oauth_pending_verifier'
   };
 
+  // ================= State & Storage =================
   var state = {
     spreadsheetId: '',
     openMode: 'inapp',
@@ -61,6 +63,7 @@
     invLoadedOnce: false,
     stock: [],
     stockFilter: '',
+    filterLowStockOnly: false,
     currentBrand: null,
     currentCard: null,
     trxJenis: 'masuk',
@@ -400,6 +403,44 @@
     return result;
   }
 
+  // ---- Ringkasan merek & alarm low stock (sesuai rekap_stock.py) ----
+  function getBrandSummary() {
+    var brands = ['LYN', 'ML', 'XP'];
+    var cardStock = { LYN: 0, ML: 0, XP: 0 };
+    var plasticStock = { LYN: 0, ML: 0, XP: 0 };
+    var brandCounts = { LYN: 0, ML: 0, XP: 0 };
+    var brandLowCount = { LYN: 0, ML: 0, XP: 0 };
+
+    state.stock.forEach(function (r) {
+      var name = String(r.nama || '').trim();
+      var parts = name.split(/\s+/);
+      var brand = (parts[0] || '').toUpperCase();
+      if (brands.indexOf(brand) === -1) return;
+
+      var stock = Number(r.stok) || 0;
+      var isPlastic = /plastik/i.test(name);
+      if (isPlastic) plasticStock[brand] += stock;
+      else cardStock[brand] += stock;
+      brandCounts[brand]++;
+      if (isLowStock(stock)) brandLowCount[brand]++;
+    });
+
+    return {
+      cardStock: cardStock,
+      plasticStock: plasticStock,
+      counts: brandCounts,
+      lowCounts: brandLowCount
+    };
+  }
+
+  function isLowStock(stok) {
+    return stok > 0 && stok <= LIMIT_STOCK;
+  }
+
+  function isOutStock(stok) {
+    return stok <= 0;
+  }
+
   async function getStockHistory(nama) {
     var rows = await readRawRows('Stock_Mutasi');
     var target = String(nama).trim().toLowerCase();
@@ -579,13 +620,100 @@
     var q = state.stockFilter.trim().toLowerCase();
     return state.stock.filter(function (r) {
       var nm = String(r.nama || '');
+      var stok = Number(r.stok) || 0;
       var matchBrand = !brand || nm.toUpperCase().indexOf(brand) > -1;
       var matchQ = !q || nm.toLowerCase().indexOf(q) > -1;
-      return matchBrand && matchQ;
+      var matchLow = !state.filterLowStockOnly || (stok > 0 && stok <= LIMIT_STOCK);
+      return matchBrand && matchQ && matchLow;
     });
   }
 
+  function renderBrandSummaryUi() {
+    var brandSummaryContent = $('brandSummaryContent');
+    var brandSummaryThreshold = $('brandSummaryThreshold');
+    var alarm = $('lowStockAlarm');
+    var alarmText = $('lowStockAlarmText');
+    var filterBtn = $('btnLowStockFilter');
+
+    if (!brandSummaryContent) return;
+
+    var summary = getBrandSummary();
+    if (brandSummaryThreshold) {
+      brandSummaryThreshold.textContent = 'Batas: \u2264 ' + LIMIT_STOCK.toLocaleString('id-ID') + ' pcs';
+    }
+
+    var brands = ['LYN', 'ML', 'XP'];
+    var totalLow = 0;
+    brands.forEach(function (b) { totalLow += (summary.lowCounts[b] || 0); });
+
+    if (filterBtn) {
+      filterBtn.classList.toggle('active', !!state.filterLowStockOnly);
+      filterBtn.setAttribute('aria-pressed', state.filterLowStockOnly ? 'true' : 'false');
+      filterBtn.textContent = state.filterLowStockOnly ? 'Tampilkan Semua' : ('Hampir Habis (' + totalLow + ')');
+    }
+
+    if (totalLow > 0) {
+      if (alarm) {
+        alarm.className = 'alarm-banner show ' + (totalLow >= 5 ? 'danger' : '');
+      }
+      if (alarmText) {
+        alarmText.innerHTML = '&#9888; <b>' + totalLow + ' item</b> hampir habis (&le; ' +
+          LIMIT_STOCK.toLocaleString('id-ID') + ' pcs).';
+      }
+    } else {
+      if (alarm) alarm.className = 'alarm-banner';
+      if (alarmText) alarmText.textContent = '';
+    }
+
+    var html = '<table class="brand-summary-table">' +
+      '<thead><tr>' +
+      '<th>Merk</th>' +
+      '<th style="text-align:right;">Card</th>' +
+      '<th style="text-align:right;">Plastik</th>' +
+      '<th style="text-align:right;">Total Sisa</th>' +
+      '<th style="text-align:right;">Item</th>' +
+      '<th style="text-align:right;">Hampir Habis</th>' +
+      '</tr></thead><tbody>';
+
+    var totCard = 0, totPlastik = 0, totSisa = 0, totItems = 0, totLow = 0;
+
+    brands.forEach(function (b) {
+      var card = summary.cardStock[b] || 0;
+      var plastik = summary.plasticStock[b] || 0;
+      var total = card + plastik;
+      var items = summary.counts[b] || 0;
+      var low = summary.lowCounts[b] || 0;
+
+      totCard += card;
+      totPlastik += plastik;
+      totSisa += total;
+      totItems += items;
+      totLow += low;
+
+      html += '<tr>' +
+        '<td><b>' + b + '</b></td>' +
+        '<td class="num">' + card.toLocaleString('id-ID') + '</td>' +
+        '<td class="num">' + plastik.toLocaleString('id-ID') + '</td>' +
+        '<td class="num">' + total.toLocaleString('id-ID') + '</td>' +
+        '<td class="num">' + items.toLocaleString('id-ID') + '</td>' +
+        '<td class="num" style="' + (low > 0 ? 'color:var(--amber);font-weight:700;' : '') + '">' + low.toLocaleString('id-ID') + '</td>' +
+        '</tr>';
+    });
+
+    html += '<tr style="border-top:1px solid var(--line);">' +
+      '<td><b>TOTAL</b></td>' +
+      '<td class="num"><b>' + totCard.toLocaleString('id-ID') + '</b></td>' +
+      '<td class="num"><b>' + totPlastik.toLocaleString('id-ID') + '</b></td>' +
+      '<td class="num"><b>' + totSisa.toLocaleString('id-ID') + '</b></td>' +
+      '<td class="num"><b>' + totItems.toLocaleString('id-ID') + '</b></td>' +
+      '<td class="num" style="' + (totLow > 0 ? 'color:var(--amber);font-weight:700;' : '') + '"><b>' + totLow.toLocaleString('id-ID') + '</b></td>' +
+      '</tr></tbody></table>';
+
+    brandSummaryContent.innerHTML = html;
+  }
+
   function renderGrid() {
+    renderBrandSummaryUi();
     var rows = currentFilteredList();
 
     if (!rows.length) {
@@ -601,14 +729,18 @@
     $('invGrid').innerHTML = rows.map(function (r) {
       var stok = Number(r.stok) || 0;
       var cls = stok > 0 ? '' : (stok < 0 ? 'neg' : 'zero');
+      if (isLowStock(stok)) cls = 'low';
       var photo = r.fotoUrl
         ? '<img src="' + escapeHtml(r.fotoUrl) + '" loading="lazy" ' +
           'onerror="this.parentNode.innerHTML=\'<div class=&quot;ci-placeholder&quot;>&#128196;</div>\'">'
         : '<div class="ci-placeholder">&#128196;</div>';
+      var stockLabel = 'stok: ' + stok.toLocaleString('id-ID') + ' pcs';
+      if (isLowStock(stok)) stockLabel = '⚠ ' + stockLabel + ' (HAMPIR HABIS)';
+      if (isOutStock(stok)) stockLabel = '⚠ stok: ' + stok.toLocaleString('id-ID') + ' pcs (HABIS)';
       return '<div class="catalog-item" data-nama="' + escapeHtml(r.nama) + '">' +
         '<div class="ci-photo-wrap">' + photo + '</div>' +
         '<div class="ci-label">' + escapeHtml(r.nama) + '</div>' +
-        '<div class="ci-stock ' + cls + '">stok: ' + stok.toLocaleString('id-ID') + ' pcs</div>' +
+        '<div class="ci-stock ' + cls + '">' + stockLabel + '</div>' +
         '</div>';
     }).join('');
 
@@ -619,6 +751,19 @@
 
   $('btnInvReload').addEventListener('click', function () { loadInventory(); });
   $('btnGotoSettingsFromInv').addEventListener('click', function () { openSettings(); });
+
+  $('btnLowStockFilter').addEventListener('click', function () {
+    state.filterLowStockOnly = !state.filterLowStockOnly;
+    renderGrid();
+  });
+  $('btnShowLowStock').addEventListener('click', function () {
+    state.currentBrand = '';
+    $('invBrandLabel').textContent = 'Hampir Habis';
+    state.stockFilter = '';
+    $('invSearch').value = '';
+    state.filterLowStockOnly = true;
+    renderGrid();
+  });
 
   var searchDebounce;
   $('invSearch').addEventListener('input', function () {
@@ -687,7 +832,31 @@
     stok = Number(stok) || 0;
     var el = $('dtStok');
     el.textContent = stok.toLocaleString('id-ID');
-    el.className = 'rvalue mono' + (stok > 0 ? '' : (stok < 0 ? ' neg' : ' zero'));
+    var cls = stok > 0 ? '' : (stok < 0 ? ' neg' : ' zero');
+    if (isLowStock(stok)) cls = ' low';
+    el.className = 'rvalue mono' + cls;
+    var wrap = $('dtStok').parentNode;
+    if (isLowStock(stok)) {
+      var badge = wrap.querySelector('.stock-alert-badge');
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'stock-alert-badge';
+        wrap.appendChild(badge);
+      }
+      badge.textContent = 'PERINGATAN: STOK HAMPIR HABIS (\u2264 ' + LIMIT_STOCK.toLocaleString('id-ID') + ' pcs)';
+    } else {
+      var oldBadge = wrap.querySelector('.stock-alert-badge');
+      if (oldBadge) oldBadge.remove();
+    }
+    if (stok <= 0) {
+      var badge0 = wrap.querySelector('.stock-alert-badge');
+      if (!badge0) {
+        badge0 = document.createElement('div');
+        badge0.className = 'stock-alert-badge';
+        wrap.appendChild(badge0);
+      }
+      badge0.textContent = 'PERINGATAN: STOK HABIS';
+    }
   }
 
   function renderHistory(hist) {

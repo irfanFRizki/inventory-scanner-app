@@ -165,7 +165,52 @@
   }
   .ci-stock{ font-size:11px; color:var(--green); padding:0 10px 10px; font-family:'Space Mono', monospace; }
   .ci-stock.zero{ color:var(--muted); }
-  .ci-stock.neg{ color:var(--red); }
+  .ci-stock.neg{ color:var(--red); font-weight:700; }
+  .ci-stock.low{ color:var(--amber); font-weight:700; }
+
+  .stock-alert-badge{
+    display:block; margin-top:6px; font-size:11px; font-weight:700;
+    color:var(--amber); background:rgba(255,176,32,.12);
+    border:1px solid var(--amber); border-radius:6px; padding:4px 8px;
+    text-align:center;
+  }
+  .rvalue.low{ color:var(--amber); }
+
+  /* ---- Alarm & Ringkasan Merek ---- */
+  .alarm-banner{
+    background:rgba(255,176,32,.12); border:1px solid var(--amber);
+    color:var(--amber); border-radius:10px; padding:10px 14px;
+    margin:10px 12px 4px; display:none; align-items:center;
+    justify-content:space-between; font-size:12px;
+  }
+  .alarm-banner.danger{
+    background:rgba(255,77,94,.12); border-color:var(--red); color:var(--red);
+  }
+  .alarm-banner.show{ display:flex; }
+  .alarm-banner b{ font-family:'Space Mono', monospace; font-size:13px; }
+  .alarm-toggle-btn{
+    background:transparent; border:1px solid currentColor; color:inherit;
+    border-radius:6px; padding:4px 8px; font-size:11px; font-weight:700; cursor:pointer;
+  }
+
+  .brand-summary-card{
+    background:var(--panel-2); border:1px solid var(--line);
+    border-radius:12px; padding:12px; margin:10px 0 16px;
+    overflow-x:auto;
+  }
+  .brand-summary-title{
+    font-size:12px; text-transform:uppercase; letter-spacing:1px;
+    color:var(--muted); margin-bottom:8px; display:flex; justify-content:space-between;
+  }
+  .brand-summary-table{
+    width:100%; min-width:480px; border-collapse:collapse; font-size:12px;
+  }
+  .brand-summary-table th, .brand-summary-table td{
+    padding:6px 4px; text-align:left; border-bottom:1px solid var(--line);
+  }
+  .brand-summary-table th{ color:var(--muted); font-weight:600; font-size:11px; }
+  .brand-summary-table td.num{ text-align:right; font-family:'Space Mono', monospace; }
+  .brand-summary-table tr:last-child td{ border-bottom:none; font-weight:700; }
 
   .inv-state{
     position:absolute; inset:0; display:none; align-items:center; justify-content:center;
@@ -403,8 +448,17 @@
       </div>
       <div class="inv-toolbar" style="padding-top:0;">
         <input type="text" id="invSearch" class="search-input" placeholder="Cari nama card...">
+        <button type="button" class="alarm-toggle-btn" id="btnLowStockFilter" aria-pressed="false">Hampir habis</button>
       </div>
       <div class="inv-meta" id="invMeta"></div>
+      <div class="alarm-banner" id="lowStockAlarm" role="status" aria-live="polite">
+        <span id="lowStockAlarmText"></span>
+        <button type="button" class="alarm-toggle-btn" id="btnShowLowStock">Lihat</button>
+      </div>
+      <div class="brand-summary-card" id="brandSummaryCard" aria-label="Ringkasan stok per merek">
+        <div class="brand-summary-title"><span>Ringkasan Merek</span><span id="brandSummaryThreshold"></span></div>
+        <div id="brandSummaryContent"></div>
+      </div>
 
       <div class="inv-body">
         <div id="invGrid" class="catalog-grid"></div>
