@@ -1014,10 +1014,23 @@
       var result = await BarcodeScanner.scan(options);
       var barcodes = (result && result.barcodes) || [];
       if (!barcodes.length) { toast('Tidak ada kode item terdeteksi.'); return; }
-      var scannedName = String(barcodes[0].rawValue || '').trim();
-      await pushHistory(scannedName);
+      var scannedValue = String(barcodes[0].rawValue || '').trim();
+      await pushHistory(scannedValue);
       if (state.vibrate) { try { await Haptics.vibrate({ duration: 80 }); } catch (e) {} }
       if (!state.invLoadedOnce || !state.stock.length) await loadInventory(true);
+      
+      // Extract card parameter from URL if scanned value is a URL
+      var scannedName = scannedValue;
+      try {
+        if (scannedValue.match(/^https?:\/\//i)) {
+          var url = new URL(scannedValue);
+          var cardParam = url.searchParams.get('card');
+          if (cardParam) scannedName = cardParam;
+        }
+      } catch (e) {
+        // If URL parsing fails, use original value
+      }
+      
       // Normalize: decode URL encoding, collapse whitespace, lowercase
       var normalized = decodeURIComponent(scannedName).replace(/\s+/g, ' ').trim().toLocaleLowerCase();
       var row = state.stock.find(function (item) { 

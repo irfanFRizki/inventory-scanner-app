@@ -1,6 +1,6 @@
 {
   "name": "inventory-scanner-app",
-  "version": "3.0.5",
+  "version": "3.0.6",
   "description": "Scan QR lokasi gudang (auto-open link) + Inventory viewer, dibangun dengan Capacitor",
   "author": "irfanFRizki",
   "license": "MIT",
