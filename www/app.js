@@ -1000,6 +1000,49 @@
 
   $('btnScan').addEventListener('click', startScan);
 
+  // Scan kode item dari tab Inventory lalu langsung siapkan transaksi inbound.
+  async function startInventoryInboundScan() {
+    if (scanning) return;
+    scanning = true;
+    var btn = $('btnScanInvInbound');
+    btn.disabled = true;
+    btn.textContent = 'Memindai...';
+    try {
+      await ensureScannerReady();
+      var options = {};
+      if (state.qrOnly) options.formats = ['QrCode'];
+      var result = await BarcodeScanner.scan(options);
+      var barcodes = (result && result.barcodes) || [];
+      if (!barcodes.length) { toast('Tidak ada kode item terdeteksi.'); return; }
+      var scannedName = String(barcodes[0].rawValue || '').trim();
+      await pushHistory(scannedName);
+      if (state.vibrate) { try { await Haptics.vibrate({ duration: 80 }); } catch (e) {} }
+      if (!state.invLoadedOnce || !state.stock.length) await loadInventory(true);
+      var normalized = scannedName.toLocaleLowerCase();
+      var row = state.stock.find(function (item) { return String(item.nama || '').trim().toLocaleLowerCase() === normalized; });
+      if (!row) {
+        toast('Item dengan kode/nama "' + scannedName + '" tidak ditemukan di katalog.');
+        return;
+      }
+      state.currentBrand = null;
+      $('invBrandLabel').textContent = 'Semua Brand';
+      $('invSearch').value = '';
+      state.stockFilter = '';
+      showInvScreen('grid');
+      renderGrid();
+      await openDetail(row.nama);
+      openTrx('masuk');
+    } catch (e) {
+      var msg = (e && e.message) || String(e);
+      if (!/cancel/i.test(msg)) toast('Scan inbound gagal: ' + msg);
+    } finally {
+      scanning = false;
+      btn.disabled = false;
+      btn.innerHTML = '&#128247; Scan Masuk';
+    }
+  }
+  $('btnScanInvInbound').addEventListener('click', startInventoryInboundScan);
+
   var pendingUrl = null;
   function showConfirmOpen(url) { pendingUrl = url; $('confirmUrlText').textContent = url; $('confirmModal').classList.add('show'); }
   $('btnConfirmCancel').addEventListener('click', function () { $('confirmModal').classList.remove('show'); pendingUrl = null; });
