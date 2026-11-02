@@ -1018,8 +1018,12 @@
       await pushHistory(scannedName);
       if (state.vibrate) { try { await Haptics.vibrate({ duration: 80 }); } catch (e) {} }
       if (!state.invLoadedOnce || !state.stock.length) await loadInventory(true);
-      var normalized = scannedName.toLocaleLowerCase();
-      var row = state.stock.find(function (item) { return String(item.nama || '').trim().toLocaleLowerCase() === normalized; });
+      // Normalize: decode URL encoding, collapse whitespace, lowercase
+      var normalized = decodeURIComponent(scannedName).replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      var row = state.stock.find(function (item) { 
+        var itemName = String(item.nama || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+        return itemName === normalized;
+      });
       if (!row) {
         toast('Item dengan kode/nama "' + scannedName + '" tidak ditemukan di katalog.');
         return;
