@@ -546,6 +546,10 @@
       } else {
         showInvScreen('brand');
       }
+    } else if (name === 'stock') {
+      // Always load stock data when opening Stock tab
+      if (!state.invLoadedOnce || state.autoRefresh) loadInventory(state.stock.length > 0);
+      else renderStockTab();
     }
   }
 
@@ -610,7 +614,8 @@
       }
       toast(e.message);
     }
-    renderGrid();
+    if ($('view-stock').classList.contains('active')) renderStockTab();
+    else renderGrid();
   }
 
   // Daftar yang lagi ditampilkan (sudah difilter brand + pencarian) — dipakai
@@ -629,91 +634,59 @@
   }
 
   function renderBrandSummaryUi() {
-    var brandSummaryContent = $('brandSummaryContent');
-    var brandSummaryThreshold = $('brandSummaryThreshold');
-    var alarm = $('lowStockAlarm');
-    var alarmText = $('lowStockAlarmText');
-    var filterBtn = $('btnLowStockFilter');
-
-    if (!brandSummaryContent) return;
-
     var summary = getBrandSummary();
-    if (brandSummaryThreshold) {
-      brandSummaryThreshold.textContent = 'Batas: \u2264 ' + LIMIT_STOCK.toLocaleString('id-ID') + ' pcs';
-    }
-
+    var target = $('stockBrandSummary');
+    if (!target) return;
     var brands = ['LYN', 'ML', 'XP'];
-    var totalLow = 0;
-    brands.forEach(function (b) { totalLow += (summary.lowCounts[b] || 0); });
-
-    if (filterBtn) {
-      filterBtn.classList.toggle('active', !!state.filterLowStockOnly);
-      filterBtn.setAttribute('aria-pressed', state.filterLowStockOnly ? 'true' : 'false');
-      filterBtn.textContent = state.filterLowStockOnly ? 'Tampilkan Semua' : ('Hampir Habis (' + totalLow + ')');
-    }
-
-    if (totalLow > 0) {
-      if (alarm) {
-        alarm.className = 'alarm-banner show ' + (totalLow >= 5 ? 'danger' : '');
-      }
-      if (alarmText) {
-        alarmText.innerHTML = '&#9888; <b>' + totalLow + ' item</b> hampir habis (&le; ' +
-          LIMIT_STOCK.toLocaleString('id-ID') + ' pcs).';
-      }
-    } else {
-      if (alarm) alarm.className = 'alarm-banner';
-      if (alarmText) alarmText.textContent = '';
-    }
-
-    var html = '<table class="brand-summary-table">' +
-      '<thead><tr>' +
-      '<th>Merk</th>' +
-      '<th style="text-align:right;">Card</th>' +
-      '<th style="text-align:right;">Plastik</th>' +
-      '<th style="text-align:right;">Total Sisa</th>' +
-      '<th style="text-align:right;">Item</th>' +
-      '<th style="text-align:right;">Hampir Habis</th>' +
-      '</tr></thead><tbody>';
-
-    var totCard = 0, totPlastik = 0, totSisa = 0, totItems = 0, totLow = 0;
-
+    var cardTotal = 0, plasticTotal = 0, itemTotal = 0, lowTotal = 0;
     brands.forEach(function (b) {
-      var card = summary.cardStock[b] || 0;
-      var plastik = summary.plasticStock[b] || 0;
-      var total = card + plastik;
-      var items = summary.counts[b] || 0;
-      var low = summary.lowCounts[b] || 0;
-
-      totCard += card;
-      totPlastik += plastik;
-      totSisa += total;
-      totItems += items;
-      totLow += low;
-
-      html += '<tr>' +
-        '<td><b>' + b + '</b></td>' +
-        '<td class="num">' + card.toLocaleString('id-ID') + '</td>' +
-        '<td class="num">' + plastik.toLocaleString('id-ID') + '</td>' +
-        '<td class="num">' + total.toLocaleString('id-ID') + '</td>' +
-        '<td class="num">' + items.toLocaleString('id-ID') + '</td>' +
-        '<td class="num" style="' + (low > 0 ? 'color:var(--amber);font-weight:700;' : '') + '">' + low.toLocaleString('id-ID') + '</td>' +
-        '</tr>';
+      cardTotal += summary.cardStock[b] || 0;
+      plasticTotal += summary.plasticStock[b] || 0;
+      itemTotal += summary.counts[b] || 0;
+      lowTotal += summary.lowCounts[b] || 0;
     });
-
-    html += '<tr style="border-top:1px solid var(--line);">' +
-      '<td><b>TOTAL</b></td>' +
-      '<td class="num"><b>' + totCard.toLocaleString('id-ID') + '</b></td>' +
-      '<td class="num"><b>' + totPlastik.toLocaleString('id-ID') + '</b></td>' +
-      '<td class="num"><b>' + totSisa.toLocaleString('id-ID') + '</b></td>' +
-      '<td class="num"><b>' + totItems.toLocaleString('id-ID') + '</b></td>' +
-      '<td class="num" style="' + (totLow > 0 ? 'color:var(--amber);font-weight:700;' : '') + '"><b>' + totLow.toLocaleString('id-ID') + '</b></td>' +
-      '</tr></tbody></table>';
-
-    brandSummaryContent.innerHTML = html;
+    var html = '<table class="brand-summary-table"><thead><tr><th>Merek</th><th style="text-align:right">Card</th><th style="text-align:right">Plastik</th><th style="text-align:right">Total sisa</th><th style="text-align:right">Item</th><th style="text-align:right">Hampir habis</th></tr></thead><tbody>';
+    brands.forEach(function (b) {
+      var card = summary.cardStock[b] || 0, plastic = summary.plasticStock[b] || 0;
+      html += '<tr><td><b>' + b + '</b></td><td class="num">' + card.toLocaleString('id-ID') + '</td><td class="num">' + plastic.toLocaleString('id-ID') + '</td><td class="num">' + (card + plastic).toLocaleString('id-ID') + '</td><td class="num">' + (summary.counts[b] || 0) + '</td><td class="num">' + (summary.lowCounts[b] || 0) + '</td></tr>';
+    });
+    html += '<tr><td><b>TOTAL</b></td><td class="num"><b>' + cardTotal.toLocaleString('id-ID') + '</b></td><td class="num"><b>' + plasticTotal.toLocaleString('id-ID') + '</b></td><td class="num"><b>' + (cardTotal + plasticTotal).toLocaleString('id-ID') + '</b></td><td class="num"><b>' + itemTotal + '</b></td><td class="num"><b>' + lowTotal + '</b></td></tr></tbody></table>';
+    target.innerHTML = html;
+    if ($('stockBrandLabel')) $('stockBrandLabel').textContent = 'Total stok: ' + (cardTotal + plasticTotal).toLocaleString('id-ID') + ' pcs';
   }
 
-  function renderGrid() {
+  // ---- Stock tab: ringkasan merek + item hampir habis/habis ----
+  var stockTabFilter = 'low';
+  function renderStockTab() {
     renderBrandSummaryUi();
+    var lowRows = state.stock.filter(function (r) { return isLowStock(Number(r.stok) || 0); });
+    var outRows = state.stock.filter(function (r) { return isOutStock(Number(r.stok) || 0); });
+    var query = String(($('stockSearch') && $('stockSearch').value) || '').trim().toLowerCase();
+    var rows = (stockTabFilter === 'out' ? outRows : lowRows).filter(function (r) { return !query || r.nama.toLowerCase().indexOf(query) >= 0; });
+    $('stockLowCount').textContent = lowRows.length;
+    $('stockOutCount').textContent = outRows.length;
+    var grid = $('stockGrid');
+    grid.innerHTML = rows.length ? rows.map(function (r) {
+      var stok = Number(r.stok) || 0;
+      var photo = r.fotoUrl ? '<img src="' + escapeHtml(r.fotoUrl) + '" loading="lazy" onerror="this.parentNode.innerHTML=\'<div class=&quot;ci-placeholder&quot;>&#128196;</div>\'">' : '<div class="ci-placeholder">&#128196;</div>';
+      return '<div class="catalog-item" data-nama="' + escapeHtml(r.nama) + '"><div class="ci-photo-wrap">' + photo + '</div><div class="ci-label">' + escapeHtml(r.nama) + '</div><div class="ci-stock ' + (stockTabFilter === 'out' ? (stok < 0 ? 'neg' : 'zero') : 'low') + '">' + (stockTabFilter === 'out' ? 'HABIS · ' : 'HAMPIR HABIS · ') + stok.toLocaleString('id-ID') + ' pcs</div></div>';
+    }).join('') : '<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:24px">' + (stockTabFilter === 'out' ? 'Tidak ada item yang sudah habis.' : 'Tidak ada item yang hampir habis.') + '</div>';
+    grid.querySelectorAll('.catalog-item').forEach(function (el) { el.addEventListener('click', function () { openDetail(el.dataset.nama); }); });
+    $('stockEmpty').style.display = 'none';
+    $('stockLoading').style.display = 'none';
+  }
+
+  document.querySelectorAll('.stock-tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      stockTabFilter = tab.dataset.tab;
+      document.querySelectorAll('.stock-tab').forEach(function (t) { t.classList.toggle('active', t === tab); });
+      renderStockTab();
+    });
+  });
+  $('stockSearch').addEventListener('input', renderStockTab);
+  $('btnStockReload').addEventListener('click', function () { loadInventory(true); });
+
+  function renderGrid() {
     var rows = currentFilteredList();
 
     if (!rows.length) {
@@ -752,17 +725,21 @@
   $('btnInvReload').addEventListener('click', function () { loadInventory(); });
   $('btnGotoSettingsFromInv').addEventListener('click', function () { openSettings(); });
 
-  $('btnLowStockFilter').addEventListener('click', function () {
-    state.filterLowStockOnly = !state.filterLowStockOnly;
-    renderGrid();
+  var btnLowStockFilter = $('btnLowStockFilter');
+  if (btnLowStockFilter) btnLowStockFilter.addEventListener('click', function () {
+    stockTabFilter = 'low';
+    var tab = document.querySelector('.stock-tab[data-tab="low"]');
+    document.querySelectorAll('.stock-tab').forEach(function (t) { t.classList.toggle('active', t === tab); });
+    renderStockTab();
+    switchView('stock');
   });
-  $('btnShowLowStock').addEventListener('click', function () {
-    state.currentBrand = '';
-    $('invBrandLabel').textContent = 'Hampir Habis';
-    state.stockFilter = '';
-    $('invSearch').value = '';
-    state.filterLowStockOnly = true;
-    renderGrid();
+  var btnShowLowStock = $('btnShowLowStock');
+  if (btnShowLowStock) btnShowLowStock.addEventListener('click', function () {
+    stockTabFilter = 'low';
+    document.querySelectorAll('.stock-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === 'low'); });
+    if ($('stockSearch')) $('stockSearch').value = '';
+    renderStockTab();
+    switchView('stock');
   });
 
   var searchDebounce;

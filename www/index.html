@@ -448,18 +448,8 @@
       </div>
       <div class="inv-toolbar" style="padding-top:0;">
         <input type="text" id="invSearch" class="search-input" placeholder="Cari nama card...">
-        <button type="button" class="alarm-toggle-btn" id="btnLowStockFilter" aria-pressed="false">Hampir habis</button>
       </div>
       <div class="inv-meta" id="invMeta"></div>
-      <div class="alarm-banner" id="lowStockAlarm" role="status" aria-live="polite">
-        <span id="lowStockAlarmText"></span>
-        <button type="button" class="alarm-toggle-btn" id="btnShowLowStock">Lihat</button>
-      </div>
-      <div class="brand-summary-card" id="brandSummaryCard" aria-label="Ringkasan stok per merek">
-        <div class="brand-summary-title"><span>Ringkasan Merek</span><span id="brandSummaryThreshold"></span></div>
-        <div id="brandSummaryContent"></div>
-      </div>
-
       <div class="inv-body">
         <div id="invGrid" class="catalog-grid"></div>
 
@@ -595,9 +585,42 @@
     </div>
   </div>
 
+  <!-- ===== Stock View: Hampir Habis & Sudah Habis ===== -->
+  <div class="view" id="view-stock">
+    <div class="stock-view" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+      <div class="stock-toolbar" style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line);">
+        <span class="stock-brand-title mono" id="stockBrandLabel" style="flex:1; font-size:14px; color:var(--text); text-align:center;"></span>
+        <div class="icon-btn" id="btnStockReload" style="width:32px;height:32px;font-size:14px;">&#8635;</div>
+      </div>
+      <div class="stock-toolbar" style="padding-top:0; padding:10px 12px; border-bottom:1px solid var(--line);">
+        <input type="text" id="stockSearch" class="search-input" placeholder="Cari nama card..." style="flex:1;">
+      </div>
+
+      <div id="stockBrandSummary" style="padding:10px 12px 0 12px; background:var(--panel);"></div>
+
+      <div class="stock-tabs" style="display:flex; gap:8px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line);">
+        <div class="stock-tab active" data-tab="low" style="flex:1; text-align:center; padding:9px 6px; font-size:12px; cursor:pointer; background:var(--panel-2); border:1px solid var(--line); border-radius:9px; color:var(--muted);">Hampir Habis (<span id="stockLowCount">0</span>)</div>
+        <div class="stock-tab" data-tab="out" style="flex:1; text-align:center; padding:9px 6px; font-size:12px; cursor:pointer; background:var(--panel-2); border:1px solid var(--line); border-radius:9px; color:var(--muted);">Sudah Habis (<span id="stockOutCount">0</span>)</div>
+      </div>
+
+      <div class="stock-body" style="flex:1; overflow:hidden; position:relative;">
+        <div class="stock-grid catalog-grid" id="stockGrid" style="height:100%; overflow-y:auto; padding:12px; display:grid; grid-template-columns:repeat(2, 1fr); grid-auto-rows:min-content; gap:12px;"></div>
+
+        <div class="stock-state inv-state" id="stockLoading" style="position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; background:var(--bg);">
+          <div class="spinner"></div><div>Memuat data stok...</div>
+        </div>
+        <div class="stock-state inv-state" id="stockEmpty" style="position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; background:var(--bg);">
+          <div style="font-size:34px;">&#128230;</div>
+          <div class="state-text" id="stockEmptyText" style="font-size:13px; color:var(--muted); max-width:270px; line-height:1.5;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="bottomnav">
     <div class="navbtn active" data-view="scan"><div class="ic">&#128247;</div>Scan Code</div>
     <div class="navbtn" data-view="inv"><div class="ic">&#128230;</div>Inventory</div>
+    <div class="navbtn" data-view="stock"><div class="ic">&#128221;</div>Stok</div>
     <div class="navbtn" data-view="kalibrasi"><div class="ic">&#9878;</div>Kalibrasi</div>
   </div>
 </div>
