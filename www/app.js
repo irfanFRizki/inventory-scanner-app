@@ -90,9 +90,21 @@
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ' ' + p(d.getDate()) + '/' + p(d.getMonth() + 1);
   }
 
+  // Parse tanggal dari Sheets. Teks "dd/mm/yyyy [HH:mm[:ss]]" (format Indonesia)
+  // dibaca sebagai hari/bulan/tahun; new Date() akan salah membacanya sebagai bulan/hari.
+  function parseTanggal(val) {
+    if (val instanceof Date) return val;
+    var s = String(val == null ? '' : val).trim();
+    var m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (m) {
+      return new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+    }
+    return new Date(val);
+  }
+
   function fmtTanggal(val) {
     if (!val) return '';
-    var d = new Date(val);
+    var d = parseTanggal(val);
     if (isNaN(d.getTime())) return String(val);
     var bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
     function p(n) { return n < 10 ? '0' + n : n; }
@@ -388,7 +400,7 @@
       var jp = Number(r[2]) || 0;
       stokMap[nm] = (stokMap[nm] || 0) + (jenis === 'masuk' ? jp : (jenis === 'keluar' ? -jp : 0));
       var tgl = r[4];
-      if (tgl && (!lastTgl[nm] || new Date(tgl) > new Date(lastTgl[nm]))) lastTgl[nm] = tgl;
+      if (tgl && (!lastTgl[nm] || parseTanggal(tgl) > parseTanggal(lastTgl[nm]))) lastTgl[nm] = tgl;
     });
 
     var result = Object.keys(names).map(function (nm) {
