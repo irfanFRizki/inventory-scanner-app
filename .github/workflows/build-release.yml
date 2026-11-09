@@ -97,15 +97,37 @@ jobs:
       - name: Patch AndroidManifest.xml untuk redirect OAuth Google
         run: node scripts/patch-android-manifest.js
 
+      # Unduhan Gradle dari services.gradle.org / github.com sering timeout atau 504
+      # di runner GitHub. Cache menyimpan distribusi Gradle untuk build berikutnya.
+      - name: Cache Gradle wrapper
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-wrapper-dists-v1
+
+      # Ulangi build sampai 4 kali kalau gagal karena unduhan (timeout/504).
+      # Error kompilasi yang sungguhan tetap gagal setelah percobaan terakhir.
       - name: Build Release APK (signed)
         working-directory: android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/ci/release.keystore \
-            -Pandroid.injected.signing.store.password="${KS_PASS}" \
-            -Pandroid.injected.signing.key.alias="${KS_ALIAS}" \
-            -Pandroid.injected.signing.key.password="${KS_PASS}"
+          for attempt in 1 2 3 4; do
+            echo "=== Build percobaan ${attempt}/4 ==="
+            if ./gradlew assembleRelease \
+              -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/ci/release.keystore \
+              -Pandroid.injected.signing.store.password="${KS_PASS}" \
+              -Pandroid.injected.signing.key.alias="${KS_ALIAS}" \
+              -Pandroid.injected.signing.key.password="${KS_PASS}"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 4 ]; then
+              wait=$((attempt * 30))
+              echo "Gagal. Mencoba lagi dalam ${wait} detik..."
+              sleep "$wait"
+            fi
+          done
+          echo "Build gagal setelah 4 percobaan."
+          exit 1
 
       - name: Rename APK
         run: |
