@@ -99,14 +99,66 @@ jobs:
 
       # Unduhan Gradle dari services.gradle.org / github.com sering timeout atau 504
       # di runner GitHub. Cache menyimpan distribusi Gradle untuk build berikutnya.
-      - name: Cache Gradle wrapper
-        uses: actions/cache@v4
+      # Dipisah restore/save supaya cache tetap tersimpan walau build gagal di tengah.
+      - name: Restore cache Gradle wrapper
+        id: gradle-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-wrapper-dists-v1
+          restore-keys: |
+            gradle-wrapper-dists-
+
+      # Ulangi build sampai 4 kali kalau gagal karena unduhan (timeout/504).
+      # Error kompilasi yang sungguhan tetap gagal setelah percobaan terakhir.
+      - name: Pre-download Gradle wrapper (hanya jika cache miss)
+        run: |
+          MD5_DIST=~/.gradle/wrapper/dists/gradle-8.2.1-all-d8pvvlun5bx6sdtwqhf8y9z4b
+          SHA_DIST=~/.gradle/wrapper/dists/gradle-8.2.1-all-4123ee49
+          ZIP="$MD5_DIST/gradle-8.2.1-all.zip"
+          mkdir -p "$MD5_DIST"
+          if [ -s "$ZIP" ]; then
+            echo "Gradle wrapper sudah ada di cache, dilewati."
+          else
+            echo "Cache miss — mengunduh Gradle 8.2.1 ke cache wrapper..."
+            for i in 1 2 3 4 5; do
+              echo "Percobaan unduh $i/5"
+              if curl -fL --retry 0 --connect-timeout 15 --max-time 1200 \
+                -o "$ZIP" \
+                "https://services.gradle.org/distributions/gradle-8.2.1-all.zip"; then
+                echo "Unduhan sukses ($(du -h "$ZIP" | cut -f1))"
+                break
+              fi
+              echo "Gagal. Tunggu 15 detik..."
+              sleep 15
+            done
+          fi
+          if [ ! -s "$ZIP" ]; then
+            echo "Gagal mengunduh Gradle wrapper setelah 5 percobaan."
+            exit 1
+          fi
+          # Tandai distribusi sudah terinstal agar ./gradlew tidak unduh lagi.
+          touch "$MD5_DIST/gradle-8.2.1-all.zip.ok"
+          # Beberapa versi Gradle menamai direktori cache dengan hash lain;
+          # buat symlink supaya kedua kemungkinan nama direktori terpenuhi.
+          [ -d "$SHA_DIST" ] || ln -s "$MD5_DIST" "$SHA_DIST"
+          ls -la "$MD5_DIST"
+
+      - name: Simpan cache Gradle wrapper (agar tersedia di build berikutnya)
+        if: steps.gradle-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
           path: ~/.gradle/wrapper/dists
           key: gradle-wrapper-dists-v1
 
-      # Ulangi build sampai 4 kali kalau gagal karena unduhan (timeout/504).
-      # Error kompilasi yang sungguhan tetap gagal setelah percobaan terakhir.
+      - name: Setel timeout Gradle (hindari gagal jaringan 504/timeout)
+        run: |
+          cat >> android/gradle.properties <<'EOF'
+          systemProp.org.gradle.internal.http.connectionTimeout=120000
+          systemProp.org.gradle.internal.http.socketTimeout=120000
+          EOF
+          cat android/gradle.properties
+
       - name: Build Release APK (signed)
         working-directory: android
         run: |
