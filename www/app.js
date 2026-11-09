@@ -801,13 +801,47 @@
     var m = String(url || '').match(/id=([^&]+)/);
     return m ? 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1600' : url;
   }
-  function openLightbox(url) {
-    $('lightboxImg').src = url;
+  var lightboxToken = 0;
+  function openLightbox(url, fallbackUrl) {
+    var img = $('lightboxImg');
+    var loading = $('lightboxLoading');
+    var token = ++lightboxToken;
+    var triedFallback = false;
+
+    img.classList.remove('loaded');
+    $('lightboxLoadingText').textContent = 'Memuat foto...';
+    loading.classList.remove('error');
+    loading.classList.add('show');
     $('photoLightbox').classList.add('show');
+
+    img.onload = function () {
+      if (token !== lightboxToken) return;
+      loading.classList.remove('show');
+      img.classList.add('loaded');
+    };
+    img.onerror = function () {
+      if (token !== lightboxToken) return;
+      // Resolusi tinggi gagal: coba sekali lagi pakai foto kecil yang sudah ada.
+      if (!triedFallback && fallbackUrl && fallbackUrl !== url) {
+        triedFallback = true;
+        img.src = fallbackUrl;
+        return;
+      }
+      $('lightboxLoadingText').textContent = 'Gagal memuat foto';
+      loading.classList.add('error');
+    };
+    img.src = url;
+    // Gambar sudah ada di cache: onload bisa tidak terpanggil setelah src diset.
+    if (img.complete && img.naturalWidth > 0) img.onload();
   }
   function closeLightbox() {
+    lightboxToken++;
     $('photoLightbox').classList.remove('show');
-    $('lightboxImg').src = '';
+    $('lightboxLoading').classList.remove('show');
+    var img = $('lightboxImg');
+    img.onload = img.onerror = null;
+    img.classList.remove('loaded');
+    img.src = '';
   }
   $('btnCloseLightbox').addEventListener('click', closeLightbox);
   $('photoLightbox').addEventListener('click', function (e) { if (e.target === $('photoLightbox')) closeLightbox(); });
@@ -839,7 +873,7 @@
     img.src = fotoUrl;
     wrap.style.display = 'block';
     img.onerror = function () { wrap.style.display = 'none'; };
-    wrap.onclick = function () { openLightbox(driveHiRes(fotoUrl)); };
+    wrap.onclick = function () { openLightbox(driveHiRes(fotoUrl), fotoUrl); };
   }
 
   $('btnDtPrev').addEventListener('click', function () { switchDetailItem(-1); });
