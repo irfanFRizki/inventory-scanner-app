@@ -381,6 +381,16 @@
     });
   }
 
+  // Brand otomatis = kata pertama di Nama Card (mis. "XP Card ATT" -> "XP").
+  function brandFromName(nama) {
+    var first = String(nama || '').trim().split(/\s+/)[0] || '';
+    return first.toUpperCase();
+  }
+  function brandBadgeHtml(nama) {
+    var b = brandFromName(nama);
+    return b ? '<span class="brand-badge brand-' + escapeHtml(b.toLowerCase().replace(/[^a-z0-9]/g, '')) + '">' + escapeHtml(b) + '</span>' : '';
+  }
+
   // ---- Domain: stok inventory (mengikuti skema Kalibrasi_Card / Stock_Mutasi) ----
   async function getStockList() {
     var cal = await readRawRows('Kalibrasi_Card');
@@ -406,6 +416,7 @@
     var result = Object.keys(names).map(function (nm) {
       return {
         nama: nm,
+        brand: brandFromName(nm),
         stok: stokMap[nm] || 0,
         fotoUrl: foto[nm] || '',
         tanggalTerakhir: lastTgl[nm] ? fmtTanggal(lastTgl[nm]) : ''
@@ -681,7 +692,7 @@
     grid.innerHTML = rows.length ? rows.map(function (r) {
       var stok = Number(r.stok) || 0;
       var photo = r.fotoUrl ? '<img src="' + escapeHtml(r.fotoUrl) + '" loading="lazy" onerror="this.parentNode.innerHTML=\'<div class=&quot;ci-placeholder&quot;>&#128196;</div>\'">' : '<div class="ci-placeholder">&#128196;</div>';
-      return '<div class="catalog-item" data-nama="' + escapeHtml(r.nama) + '"><div class="ci-photo-wrap">' + photo + '</div><div class="ci-label">' + escapeHtml(r.nama) + '</div><div class="ci-stock ' + (stockTabFilter === 'out' ? (stok < 0 ? 'neg' : 'zero') : 'low') + '">' + (stockTabFilter === 'out' ? 'HABIS · ' : 'HAMPIR HABIS · ') + stok.toLocaleString('id-ID') + ' pcs</div></div>';
+      return '<div class="catalog-item" data-nama="' + escapeHtml(r.nama) + '"><div class="ci-photo-wrap">' + photo + '</div><div class="ci-brand">' + brandBadgeHtml(r.nama) + '</div><div class="ci-label">' + escapeHtml(r.nama) + '</div><div class="ci-stock ' + (stockTabFilter === 'out' ? (stok < 0 ? 'neg' : 'zero') : 'low') + '">' + (stockTabFilter === 'out' ? 'HABIS · ' : 'HAMPIR HABIS · ') + stok.toLocaleString('id-ID') + ' pcs</div></div>';
     }).join('') : '<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:24px">' + (stockTabFilter === 'out' ? 'Tidak ada item yang sudah habis.' : 'Tidak ada item yang hampir habis.') + '</div>';
     grid.querySelectorAll('.catalog-item').forEach(function (el) { el.addEventListener('click', function () { openDetail(el.dataset.nama); }); });
     $('stockEmpty').style.display = 'none';
@@ -724,6 +735,7 @@
       if (isOutStock(stok)) stockLabel = '⚠ stok: ' + stok.toLocaleString('id-ID') + ' pcs (HABIS)';
       return '<div class="catalog-item" data-nama="' + escapeHtml(r.nama) + '">' +
         '<div class="ci-photo-wrap">' + photo + '</div>' +
+        '<div class="ci-brand">' + brandBadgeHtml(r.nama) + '</div>' +
         '<div class="ci-label">' + escapeHtml(r.nama) + '</div>' +
         '<div class="ci-stock ' + cls + '">' + stockLabel + '</div>' +
         '</div>';
@@ -782,6 +794,7 @@
     state.currentCard = row || { nama: nama, stok: 0 };
 
     $('dtName').textContent = nama;
+    if ($('dtBrand')) $('dtBrand').innerHTML = brandBadgeHtml(nama);
     $('dtUpdated').textContent = (row && row.tanggalTerakhir) ? 'Transaksi terakhir: ' + row.tanggalTerakhir : 'Belum ada transaksi';
     setStokReadout(state.currentCard.stok);
     renderDetailPhoto(state.currentCard.fotoUrl);
