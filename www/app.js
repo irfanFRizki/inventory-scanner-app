@@ -391,6 +391,19 @@
     return b ? '<span class="brand-badge brand-' + escapeHtml(b.toLowerCase().replace(/[^a-z0-9]/g, '')) + '">' + escapeHtml(b) + '</span>' : '';
   }
 
+  // Daftar brand dinamis dari data stok (kata pertama tiap Nama Card).
+  // Kalau data belum ada, pakai brand bawaan supaya layar pilih brand tidak kosong.
+  var DEFAULT_BRANDS = ['ML', 'XP', 'LYN'];
+  function getBrandList() {
+    var seen = {};
+    (state.stock || []).forEach(function (r) {
+      var b = brandFromName(r.nama);
+      if (b) seen[b] = true;
+    });
+    var list = Object.keys(seen).sort(function (a, b) { return a.localeCompare(b); });
+    return list.length ? list : DEFAULT_BRANDS.slice();
+  }
+
   // ---- Domain: stok inventory (mengikuti skema Kalibrasi_Card / Stock_Mutasi) ----
   async function getStockList() {
     var cal = await readRawRows('Kalibrasi_Card');
@@ -428,16 +441,13 @@
 
   // ---- Ringkasan merek & alarm low stock (sesuai rekap_stock.py) ----
   function getBrandSummary() {
-    var brands = ['LYN', 'ML', 'XP'];
-    var cardStock = { LYN: 0, ML: 0, XP: 0 };
-    var plasticStock = { LYN: 0, ML: 0, XP: 0 };
-    var brandCounts = { LYN: 0, ML: 0, XP: 0 };
-    var brandLowCount = { LYN: 0, ML: 0, XP: 0 };
+    var brands = getBrandList();
+    var cardStock = {}, plasticStock = {}, brandCounts = {}, brandLowCount = {};
+    brands.forEach(function (b) { cardStock[b] = 0; plasticStock[b] = 0; brandCounts[b] = 0; brandLowCount[b] = 0; });
 
     state.stock.forEach(function (r) {
       var name = String(r.nama || '').trim();
-      var parts = name.split(/\s+/);
-      var brand = (parts[0] || '').toUpperCase();
+      var brand = brandFromName(name);
       if (brands.indexOf(brand) === -1) return;
 
       var stock = Number(r.stok) || 0;
@@ -449,6 +459,7 @@
     });
 
     return {
+      brands: brands,
       cardStock: cardStock,
       plasticStock: plasticStock,
       counts: brandCounts,
@@ -568,6 +579,8 @@
         else renderGrid();
       } else {
         showInvScreen('brand');
+        renderBrandPicker();
+        if (!state.invLoadedOnce) loadInventory(state.stock.length > 0);
       }
     } else if (name === 'stock') {
       // Always load stock data when opening Stock tab
@@ -586,21 +599,31 @@
     $('invScreenGrid').classList.toggle('active', which === 'grid');
   }
 
-  document.querySelectorAll('.brand-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      state.currentBrand = btn.dataset.brand || '';
-      $('invBrandLabel').textContent = state.currentBrand ? state.currentBrand : 'Semua Brand';
-      state.stockFilter = '';
-      $('invSearch').value = '';
-      showInvScreen('grid');
-      if (!state.invLoadedOnce || state.autoRefresh) loadInventory(state.stock.length > 0);
-      else renderGrid();
-    });
+  // Tombol brand dibuat dari data (kata pertama Nama Card), bukan daftar tetap.
+  function renderBrandPicker() {
+    var box = $('brandButtons');
+    if (!box) return;
+    box.innerHTML = getBrandList().map(function (b) {
+      return '<button class="btn brand-btn" data-brand="' + escapeHtml(b) + '">' + escapeHtml(b) + '</button>';
+    }).join('');
+  }
+
+  document.querySelector('.brand-pick').addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.brand-btn') : null;
+    if (!btn) return;
+    state.currentBrand = btn.dataset.brand || '';
+    $('invBrandLabel').textContent = state.currentBrand ? state.currentBrand : 'Semua Brand';
+    state.stockFilter = '';
+    $('invSearch').value = '';
+    showInvScreen('grid');
+    if (!state.invLoadedOnce || state.autoRefresh) loadInventory(state.stock.length > 0);
+    else renderGrid();
   });
 
   $('btnGantiBrand').addEventListener('click', function () {
     state.currentBrand = null;
     showInvScreen('brand');
+    renderBrandPicker();
   });
 
   function showInvState(which) {
@@ -637,6 +660,7 @@
       }
       toast(e.message);
     }
+    renderBrandPicker();
     if ($('view-stock').classList.contains('active')) renderStockTab();
     else renderGrid();
   }
@@ -649,7 +673,7 @@
     return state.stock.filter(function (r) {
       var nm = String(r.nama || '');
       var stok = Number(r.stok) || 0;
-      var matchBrand = !brand || nm.toUpperCase().indexOf(brand) > -1;
+      var matchBrand = !brand || brandFromName(nm) === brand;
       var matchQ = !q || nm.toLowerCase().indexOf(q) > -1;
       var matchLow = !state.filterLowStockOnly || (stok > 0 && stok <= LIMIT_STOCK);
       return matchBrand && matchQ && matchLow;
@@ -660,7 +684,7 @@
     var summary = getBrandSummary();
     var target = $('stockBrandSummary');
     if (!target) return;
-    var brands = ['LYN', 'ML', 'XP'];
+    var brands = summary.brands;
     var cardTotal = 0, plasticTotal = 0, itemTotal = 0, lowTotal = 0;
     brands.forEach(function (b) {
       cardTotal += summary.cardStock[b] || 0;
