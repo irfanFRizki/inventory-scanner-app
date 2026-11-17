@@ -68,6 +68,9 @@
     currentCard: null,
     trxJenis: 'masuk',
     trxMode: 'timbang',
+    mutasi: [],
+    mutasiFilter: '',
+    mutasiTab: 'all',
     oauth: { accessToken: '', expiresAt: 0, refreshToken: '', email: '' }
   };
 
@@ -490,6 +493,119 @@
     return res;
   }
 
+  // ---- Mutasi: riwayat pergerakan stok semua card (masuk/keluar) ----
+  async function getMutasiList() {
+    var rows = await readRawRows('Stock_Mutasi');
+    var res = rows.map(function (r) {
+      var nm = r[0] || '';
+      var jenis = String(r[1] || '').trim();
+      var jp = Number(r[2]) || 0;
+      var tgl = r[4];
+      return {
+        nama: nm,
+        jenis: jenis.toLowerCase(),
+        jumlahPcs: jp,
+        totalTimbangan: Number(r[3]) || 0,
+        tanggal: tgl ? fmtTanggal(tgl) : '',
+        keterangan: r[5] || '',
+        rawTgl: tgl
+      };
+    }).filter(function (r) { return r.nama && r.tanggal; });
+    // Urutkan paling baru di atas (rawTgl untuk sorting)
+    res.sort(function (a, b) {
+      var da = parseTanggal(a.rawTgl);
+      var db = parseTanggal(b.rawTgl);
+      return db - da;
+    });
+    return res;
+  }
+
+  function filterMutasi(list) {
+    var q = state.mutasiFilter.trim().toLowerCase();
+    var tab = state.mutasiTab;
+    return list.filter(function (r) {
+      var matchQ = !q || r.nama.toLowerCase().indexOf(q) > -1;
+      var matchTab = tab === 'all' || r.jenis === tab;
+      return matchQ && matchTab;
+    });
+  }
+
+  function updateMutasiCounts(list) {
+    var all = list.length;
+    var masuk = list.filter(function (r) { return r.jenis === 'masuk'; }).length;
+    var keluar = list.filter(function (r) { return r.jenis === 'keluar'; }).length;
+    $('mutasiAllCount').textContent = all;
+    $('mutasiMasukCount').textContent = masuk;
+    $('mutasiKeluarCount').textContent = keluar;
+  }
+
+  function renderMutasi(list) {
+    var filtered = filterMutasi(list);
+    updateMutasiCounts(filtered);
+
+    if (!filtered.length) {
+      $('mutasiList').innerHTML = '';
+      var emptyText = state.mutasiFilter
+        ? 'Tidak ada mutasi yang cocok dengan pencarian \"' + escapeHtml(state.mutasiFilter) + '\".'
+        : (state.mutasiTab === 'all'
+          ? 'Belum ada riwayat mutasi stok.'
+          : (state.mutasiTab === 'masuk'
+            ? 'Belum ada barang masuk yang tercatat.'
+            : 'Belum ada barang keluar yang tercatat.'));
+      $('mutasiEmptyText').textContent = emptyText;
+      $('mutasiEmpty').style.display = 'flex';
+      $('mutasiLoading').style.display = 'none';
+      return;
+    }
+    $('mutasiEmpty').style.display = 'none';
+    $('mutasiLoading').style.display = 'none';
+
+    $('mutasiList').innerHTML = filtered.map(function (r) {
+      var isMasuk = r.jenis === 'masuk';
+      var arrowHtml = isMasuk ? '&#8679;' : '&#8681;';
+      var arrowClass = isMasuk ? 'masuk' : 'keluar';
+      var qtyClass = isMasuk ? 'masuk' : 'keluar';
+      var qtyPrefix = isMasuk ? '+' : '-';
+      return '<div class="mutasi-item">' +
+        '<div class="mutasi-arrow ' + arrowClass + '">' + arrowHtml + '</div>' +
+        '<div class="mutasi-info">' +
+          '<div class="mutasi-name">' + escapeHtml(r.nama) + '</div>' +
+          '<div class="mutasi-meta">' +
+            '<span class="mutasi-time">' + escapeHtml(r.tanggal) + '</span>' +
+            (r.keterangan ? '<span class="mutasi-desc">· ' + escapeHtml(r.keterangan) + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="mutasi-qty ' + qtyClass + '">' + qtyPrefix + Number(r.jumlahPcs).toLocaleString('id-ID') + ' pcs</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  async function loadMutasi() {
+    if (!isSignedIn()) {
+      $('mutasiEmptyText').textContent = 'Belum masuk dengan akun Google. Buka Pengaturan untuk sign-in.';
+      $('mutasiEmpty').style.display = 'flex';
+      $('mutasiLoading').style.display = 'none';
+      return;
+    }
+    if (!state.spreadsheetId) {
+      $('mutasiEmptyText').textContent = 'Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.';
+      $('mutasiEmpty').style.display = 'flex';
+      $('mutasiLoading').style.display = 'none';
+      return;
+    }
+    $('mutasiLoading').style.display = 'flex';
+    $('mutasiEmpty').style.display = 'none';
+    try {
+      state.mutasi = await getMutasiList();
+      renderMutasi(state.mutasi);
+    } catch (e) {
+      $('mutasiEmptyText').textContent = 'Gagal memuat: ' + e.message;
+      $('mutasiEmpty').style.display = 'flex';
+      $('mutasiLoading').style.display = 'none';
+      toast(e.message);
+    }
+  }
+
   async function hitungPcsDariTimbangan(nama, timbanganBaru) {
     var cal = await readRawRows('Kalibrasi_Card');
     var target = String(nama).trim().toLowerCase();
@@ -586,6 +702,9 @@
       // Always load stock data when opening Stock tab
       if (!state.invLoadedOnce || state.autoRefresh) loadInventory(state.stock.length > 0);
       else renderStockTab();
+    } else if (name === 'mutasi') {
+      if (!state.invLoadedOnce || state.autoRefresh) loadMutasi();
+      else renderMutasi(state.mutasi);
     }
   }
 
@@ -732,6 +851,20 @@
   });
   $('stockSearch').addEventListener('input', renderStockTab);
   $('btnStockReload').addEventListener('click', function () { loadInventory(true); });
+
+  // ---- Mutasi tab event listeners ----
+  document.querySelectorAll('.mutasi-tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      state.mutasiTab = tab.dataset.tab;
+      document.querySelectorAll('.mutasi-tab').forEach(function (t) { t.classList.toggle('active', t === tab); });
+      renderMutasi(state.mutasi);
+    });
+  });
+  $('mutasiSearch').addEventListener('input', function () {
+    state.mutasiFilter = $('mutasiSearch').value;
+    renderMutasi(state.mutasi);
+  });
+  $('btnMutasiReload').addEventListener('click', function () { loadMutasi(); });
 
   function renderGrid() {
     var rows = currentFilteredList();

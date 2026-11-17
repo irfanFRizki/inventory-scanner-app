@@ -336,6 +336,30 @@
   .hist-pcs{ color:var(--text); font-family:'Space Mono', monospace; }
   .hist-tgl{ color:var(--muted); font-size:11px; margin-top:2px; }
 
+  /* ===== Mutasi view ===== */
+  .mutasi-list{ padding:12px; }
+  .mutasi-item{
+    display:flex; align-items:center; gap:12px;
+    padding:12px; margin-bottom:10px; border-radius:12px;
+    background:var(--panel-2); border:1px solid var(--line);
+  }
+  .mutasi-arrow{
+    flex:0 0 auto; width:40px; height:40px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:18px; font-weight:700;
+  }
+  .mutasi-arrow.masuk{ background:rgba(57,255,20,.15); color:var(--green); border:1px solid var(--green); }
+  .mutasi-arrow.keluar{ background:rgba(255,77,94,.15); color:var(--red); border:1px solid var(--red); }
+  .mutasi-info{ flex:1; min-width:0; }
+  .mutasi-name{ font-size:14px; color:var(--text); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mutasi-meta{ display:flex; align-items:center; gap:8px; margin-top:4px; font-size:11px; color:var(--muted); }
+  .mutasi-time{ color:var(--muted); font-family:'Space Mono', monospace; }
+  .mutasi-qty{ font-family:'Space Mono', monospace; font-size:12px; padding:2px 8px; border-radius:6px; }
+  .mutasi-qty.masuk{ background:rgba(57,255,20,.12); color:var(--green); }
+  .mutasi-qty.keluar{ background:rgba(255,77,94,.12); color:var(--red); }
+
+  .mutasi-tab.active{ border-color:var(--cyan); color:var(--cyan); }
+
   .subtabs{ display:flex; gap:8px; margin:14px 0 14px; }
   .subtab{
     flex:1; text-align:center; padding:9px 6px; font-size:12px; cursor:pointer;
@@ -647,10 +671,42 @@
     </div>
   </div>
 
+  <!-- ===== Mutasi View: Riwayat Pergerakan Stok ===== -->
+  <div class="view" id="view-mutasi">
+    <div class="mutasi-view" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+      <div class="mutasi-toolbar" style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line);">
+        <span class="mutasi-title mono" style="flex:1; font-size:14px; color:var(--text); text-align:center;">Riwayat Mutasi Stok</span>
+        <div class="icon-btn" id="btnMutasiReload" style="width:32px;height:32px;font-size:14px;">&#8635;</div>
+      </div>
+      <div class="mutasi-toolbar" style="padding-top:0; padding:10px 12px; border-bottom:1px solid var(--line);">
+        <input type="text" id="mutasiSearch" class="search-input" placeholder="Cari nama card..." style="flex:1;">
+      </div>
+
+      <div class="mutasi-tabs" style="display:flex; gap:8px; padding:10px 12px; background:var(--panel); border-bottom:1px solid var(--line);">
+        <div class="mutasi-tab active" data-tab="all" style="flex:1; text-align:center; padding:9px 6px; font-size:12px; cursor:pointer; background:var(--panel-2); border:1px solid var(--line); border-radius:9px; color:var(--muted);">Semua (<span id="mutasiAllCount">0</span>)</div>
+        <div class="mutasi-tab" data-tab="masuk" style="flex:1; text-align:center; padding:9px 6px; font-size:12px; cursor:pointer; background:var(--panel-2); border:1px solid var(--line); border-radius:9px; color:var(--muted);">Masuk (<span id="mutasiMasukCount">0</span>)</div>
+        <div class="mutasi-tab" data-tab="keluar" style="flex:1; text-align:center; padding:9px 6px; font-size:12px; cursor:pointer; background:var(--panel-2); border:1px solid var(--line); border-radius:9px; color:var(--muted);">Keluar (<span id="mutasiKeluarCount">0</span>)</div>
+      </div>
+
+      <div class="mutasi-body" style="flex:1; overflow:hidden; position:relative;">
+        <div class="mutasi-list" id="mutasiList" style="height:100%; overflow-y:auto; padding:12px;"></div>
+
+        <div class="mutasi-state inv-state" id="mutasiLoading" style="position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; background:var(--bg);">
+          <div class="spinner"></div><div>Memuat riwayat mutasi...</div>
+        </div>
+        <div class="mutasi-state inv-state" id="mutasiEmpty" style="position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:24px; text-align:center; background:var(--bg);">
+          <div style="font-size:34px;">&#128221;</div>
+          <div class="state-text" id="mutasiEmptyText" style="font-size:13px; color:var(--muted); max-width:270px; line-height:1.5;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="bottomnav">
     <div class="navbtn active" data-view="scan"><div class="ic">&#128247;</div>Scan Code</div>
     <div class="navbtn" data-view="inv"><div class="ic">&#128230;</div>Inventory</div>
     <div class="navbtn" data-view="stock"><div class="ic">&#128221;</div>Stok</div>
+    <div class="navbtn" data-view="mutasi"><div class="ic">&#8635;</div>Mutasi</div>
     <div class="navbtn" data-view="kalibrasi"><div class="ic">&#9878;</div>Kalibrasi</div>
   </div>
 </div>
