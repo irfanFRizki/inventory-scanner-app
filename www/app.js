@@ -1374,7 +1374,9 @@
     try {
       lokasiState.view3d = window.Lokasi3D.create($('lokCanvas'), {
         statusOf: lokasiStatus,
-        onSelect: lokasiOnSelect
+        onSelect: lokasiOnSelect,
+        onDrag: function (code) { $('lokMoveTip').textContent = 'Target: ' + code + ' \u2014 lepas jari untuk memilih.'; },
+        onMove: lokasiOnMove
       });
       return true;
     } catch (e) {
@@ -1387,8 +1389,21 @@
     if (lokasiState.view3d) lokasiState.view3d.stop();
   }
 
+  function lokasiSisiText(parsed) {
+    if (!parsed) return '';
+    return (parsed.sisi === 'B' ? 'belakang' : 'depan') + (parsed.tumpuk ? ', tumpukan' : '') + (parsed.pos ? ', slot ' + parsed.pos : '');
+  }
+  function lokasiSetMoveUi(on) {
+    $('btnLokInfoMove').textContent = on ? 'Selesai' : 'Geser';
+    var tip = $('lokMoveTip');
+    tip.style.display = on ? 'block' : 'none';
+    if (on) tip.textContent = 'Seret kotak card yang menyala ke slot kosong, lalu lepas.';
+  }
   function lokasiOnSelect(item, parsed) {
     lokasiState.selected = item;
+    lokasiState.pendingMove = null;
+    $('lokMove').classList.remove('show');
+    lokasiSetMoveUi(false);
     var box = $('lokInfo');
     if (!item) { box.classList.remove('show'); $('lokHint').style.display = ''; return; }
     var st = lokasiStatus(item);
@@ -1397,7 +1412,8 @@
     $('lokInfoName').textContent = item.nama;
     $('lokInfoMeta').innerHTML =
       'Lokasi: <b>' + escapeHtml(parsed ? parsed.label : item.lokasi) + '</b> &middot; Zona ' + escapeHtml(parsed ? parsed.zona : '-') +
-      ', rak ' + (parsed ? parsed.rak : '-') + ', susun ' + (parsed ? parsed.level : '-') + '<br>' +
+      ', rak ' + (parsed ? parsed.rak : '-') + ', susun ' + (parsed ? parsed.level : '-') +
+      (parsed ? ', ' + lokasiSisiText(parsed) : '') + '<br>' +
       (item.stok === null ? '' : 'Stok: <b style="color:' + stColor + '">' + item.stok.toLocaleString('id-ID') + ' pcs</b> &middot; ') +
       '<span style="color:' + stColor + '">' + stLabel + '</span>' +
       (item.ket ? '<br>' + escapeHtml(item.ket) : '');
@@ -1462,7 +1478,7 @@
   // ---- Ubah / tambah lokasi
   function lokasiUpdateParsed() {
     var p = window.Lokasi3D.parseLokasi($('fLokKode').value);
-    $('lokParsed').textContent = p ? ('Zona ' + p.zona + ' · Rak ' + p.rak + ' · Susun ' + p.level + '  →  ' + p.label) : '';
+    $('lokParsed').textContent = p ? ('Zona ' + p.zona + ' · Rak ' + p.rak + ' · Susun ' + p.level + ' · ' + lokasiSisiText(p) + '  →  ' + p.label) : '';
   }
   function openLokasiSheet(nama) {
     var existing = null;
@@ -1523,6 +1539,43 @@
     }
   }
 
+  // ---- Geser card di peta -> kode lokasi terisi otomatis
+  function lokasiOnMove(item, slot) {
+    lokasiState.pendingMove = { item: item, code: slot.code };
+    $('lokMoveName').textContent = item.nama;
+    $('lokMoveMeta').innerHTML = 'Pindah ke <b>' + escapeHtml(slot.code) + '</b><br>dari <b>' + escapeHtml(item.lokasi) + '</b>';
+    $('lokInfo').classList.remove('show');
+    $('lokMove').classList.add('show');
+  }
+  $('btnLokInfoMove').addEventListener('click', function () {
+    if (!lokasiState.view3d || !lokasiState.selected) return;
+    var on = lokasiState.view3d.setMoveMode($('btnLokInfoMove').textContent === 'Geser');
+    lokasiSetMoveUi(on);
+  });
+  $('btnLokMoveCancel').addEventListener('click', function () {
+    if (!lokasiState.view3d) return;
+    lokasiState.view3d.cancelMove();
+    lokasiState.pendingMove = null;
+    $('lokMove').classList.remove('show');
+    $('lokInfo').classList.add('show');
+  });
+  $('btnLokMoveSave').addEventListener('click', async function () {
+    var pm = lokasiState.pendingMove;
+    if (!pm) return;
+    var btn = $('btnLokMoveSave');
+    btn.disabled = true;
+    try {
+      await saveLokasi(pm.item.nama, pm.code, pm.item.ket || '');
+      toast('Lokasi dipindah ke ' + pm.code);
+      lokasiState.rows = await getLokasiList();
+      lokasiRender();
+      lokasiState.view3d.selectByName(pm.item.nama, true);
+    } catch (e) {
+      toast('Gagal menyimpan: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $('btnLokAdd').addEventListener('click', function () { openLokasiSheet(''); });
   $('btnLokReload').addEventListener('click', function () { loadLokasi(); });
   $('btnLokReset').addEventListener('click', function () { if (lokasiState.view3d) lokasiState.view3d.resetView(); });

@@ -484,6 +484,7 @@
     align-items:center; justify-content:center; flex-direction:column; gap:12px;
     padding:24px; text-align:center; background:rgba(13,15,18,.92);
   }
+  .lok-tip{ font-size:11px; color:var(--cyan); margin:-4px 0 10px; line-height:1.5; }
   .lok-parsed{ font-size:11px; color:var(--cyan); margin-top:6px; min-height:14px; font-family:'Space Mono', monospace; }
   .lok-chip{
     font-size:11px; color:var(--amber); padding:6px 12px; border-bottom:1px solid var(--line);
@@ -765,9 +766,19 @@
       <div class="lok-info" id="lokInfo">
         <div class="nm" id="lokInfoName">-</div>
         <div class="meta" id="lokInfoMeta"></div>
+        <div class="lok-tip" id="lokMoveTip" style="display:none;"></div>
         <div class="acts">
-          <button class="btn secondary" id="btnLokInfoDetail">Detail &amp; Stok</button>
-          <button class="btn ghost" id="btnLokInfoEdit">Ubah Lokasi</button>
+          <button class="btn secondary" id="btnLokInfoDetail">Detail</button>
+          <button class="btn ghost" id="btnLokInfoMove">Geser</button>
+          <button class="btn ghost" id="btnLokInfoEdit">Ubah</button>
+        </div>
+      </div>
+      <div class="lok-info" id="lokMove">
+        <div class="nm" id="lokMoveName">-</div>
+        <div class="meta" id="lokMoveMeta"></div>
+        <div class="acts">
+          <button class="btn secondary" id="btnLokMoveCancel">Batal</button>
+          <button class="btn" id="btnLokMoveSave">Simpan Lokasi</button>
         </div>
       </div>
       <div class="lok-state" id="lokState">
@@ -791,7 +802,7 @@
 <div class="modal-backdrop" id="lokSheet">
   <div class="modal-sheet">
     <h2>Lokasi Card</h2>
-    <p class="sub">Format kode: ZONA-RAK-LEVEL, mis. <b>A-03-2</b> (zona A, rak 3, susun ke-2 dari bawah).</p>
+    <p class="sub">Format: ZONA-RAK-LEVEL-SISI. Contoh <b>B-01-2-D</b> = zona B, rak 1, susun 2, sisi depan; <b>-B</b> = belakang; tambah <b>-T</b> untuk tumpukan (<b>B-01-2-D-T</b>); nomor slot opsional di akhir (<b>B-01-2-D-3</b>). Tanpa sisi dianggap depan.</p>
     <div class="field">
       <label>Nama Card</label>
       <input type="text" id="fLokNama" list="lokCardList" placeholder="mis. XP Card ATT" autocomplete="off">
