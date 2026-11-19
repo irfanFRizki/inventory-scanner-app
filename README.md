@@ -1,6 +1,6 @@
 # Scanner Gudang (Capacitor Android)
 
-Aplikasi Android 2 tab:
+Aplikasi Android (Scan, Inventory, Stok, Mutasi, Kalibrasi, Lokasi):
 
 - **Tab "Scan Code"** — scan QR (Google Code Scanner via ML Kit, tanpa perlu
   izin kamera manual). Kalau isi QR berupa link, langsung dibuka otomatis
@@ -8,6 +8,13 @@ Aplikasi Android 2 tab:
 - **Tab "Inventory"** — UI native: daftar stok berjalan per card (foto,
   pencarian, detail, riwayat transaksi), form catat **Masuk/Keluar** dengan
   hitung otomatis jumlah pcs dari total timbangan.
+
+- **Tab "Lokasi"** — peta gudang **3D**: tiap rak digambar sebagai rak bersusun,
+  tiap card sebagai kotak di susun/level-nya, diwarnai status stok (hijau aman,
+  kuning hampir habis, merah habis). Geser = putar, 2 jari = zoom/geser, ketuk
+  card = info lokasi + tombol Detail/Ubah Lokasi. Pencarian (nama card atau kode
+  lokasi) menyorot card yang cocok dan membuat rak transparan. Tombol **+**
+  untuk mengisi/mengubah lokasi card langsung dari aplikasi.
 
 **Tidak memakai Google Apps Script sama sekali.** Aplikasi bicara langsung ke
 Google Sheets lewat **Google Sheets API v4**, diotorisasi lewat **Sign-in
@@ -73,6 +80,16 @@ Aplikasi memakai 2 sheet (tab) di spreadsheet, dengan kolom persis seperti ini
 ```
 Nama Card | Jenis | Jumlah Pcs | Total Timbangan | Tanggal | Keterangan | Qty per Iket Kecil
 ```
+
+**Lokasi_Card** (dibuat otomatis oleh aplikasi saat lokasi pertama disimpan,
+atau isi manual):
+```
+Nama Card | Lokasi | Keterangan
+```
+Kolom `Lokasi` memakai kode `ZONA-RAK-LEVEL`, mis. `A-03-2` = zona A, rak 3,
+susun ke-2 dari bawah (juga dikenali: `A3-2`, `a 3 2`, `RAK A-3-2`). Beberapa
+card boleh berbagi kode yang sama (muat berjejer di satu susun). Card tanpa
+kode lokasi tidak muncul di 3D; jumlahnya ditampilkan di atas peta.
 
 **Kalibrasi_Card** (buat manual, atau isi dari project GAS lama kamu kalau
 sudah ada datanya — cukup salin/pindahkan sheet-nya ke spreadsheet baru):

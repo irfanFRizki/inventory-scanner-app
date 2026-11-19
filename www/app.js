@@ -683,6 +683,7 @@
 
   // ================= Tab navigation =================
   function switchView(name) {
+    if (name !== 'lokasi') lokasiStop();
     document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
     document.querySelectorAll('.navbtn').forEach(function (b) { b.classList.remove('active'); });
     $('view-' + name).classList.add('active');
@@ -705,6 +706,8 @@
     } else if (name === 'mutasi') {
       if (!state.invLoadedOnce || state.autoRefresh) loadMutasi();
       else renderMutasi(state.mutasi);
+    } else if (name === 'lokasi') {
+      openLokasiView();
     }
   }
 
@@ -1327,6 +1330,227 @@
   $('fVibrate').addEventListener('change', async function () { state.vibrate = $('fVibrate').checked; await setPref(KEYS.vibrate, state.vibrate); });
   $('fQrOnly').addEventListener('change', async function () { state.qrOnly = $('fQrOnly').checked; await setPref(KEYS.qrOnly, state.qrOnly); });
   $('fAutoRefresh').addEventListener('change', async function () { state.autoRefresh = $('fAutoRefresh').checked; await setPref(KEYS.autoRefresh, state.autoRefresh); });
+
+  // ================= Lokasi: peta gudang 3D =================
+  var LOKASI_SHEET = 'Lokasi_Card';
+  var LOKASI_HEADER = ['Nama Card', 'Lokasi', 'Keterangan'];
+  var lokasiState = { rows: [], loaded: false, view3d: null, unplacedIdx: 0, selected: null, editing: null };
+
+  function lokasiItems() {
+    var stokMap = {};
+    state.stock.forEach(function (r) { stokMap[String(r.nama).trim().toLowerCase()] = r; });
+    return lokasiState.rows.map(function (l) {
+      var s = stokMap[l.nama.toLowerCase()];
+      return { nama: (s && s.nama) || l.nama, lokasi: l.lokasi, ket: l.ket, stok: s ? (Number(s.stok) || 0) : null };
+    });
+  }
+  function lokasiStatus(item) {
+    if (item.stok === null || item.stok === undefined) return 'none';
+    if (isOutStock(item.stok)) return 'out';
+    if (isLowStock(item.stok)) return 'low';
+    return 'ok';
+  }
+  function lokasiUnplaced() {
+    var has = {};
+    lokasiState.rows.forEach(function (l) { if (window.Lokasi3D.parseLokasi(l.lokasi)) has[l.nama.toLowerCase()] = true; });
+    return state.stock.filter(function (r) { return !has[String(r.nama).trim().toLowerCase()]; });
+  }
+
+  async function getLokasiList() {
+    var rows = await readRawRows(LOKASI_SHEET);
+    return rows.filter(function (r) { return r[0]; }).map(function (r) {
+      return { nama: String(r[0]).trim(), lokasi: String(r[1] == null ? '' : r[1]).trim(), ket: String(r[2] == null ? '' : r[2]) };
+    });
+  }
+
+  function lokasiShowState(text, spinner) {
+    $('lokStateText').textContent = text || '';
+    $('lokSpinner').style.display = spinner ? '' : 'none';
+    $('lokState').style.display = (text || spinner) ? 'flex' : 'none';
+  }
+
+  function lokasiEnsure3d() {
+    if (lokasiState.view3d) return true;
+    try {
+      lokasiState.view3d = window.Lokasi3D.create($('lokCanvas'), {
+        statusOf: lokasiStatus,
+        onSelect: lokasiOnSelect
+      });
+      return true;
+    } catch (e) {
+      lokasiShowState('Tampilan 3D tidak bisa dibuka: ' + e.message, false);
+      return false;
+    }
+  }
+
+  function lokasiStop() {
+    if (lokasiState.view3d) lokasiState.view3d.stop();
+  }
+
+  function lokasiOnSelect(item, parsed) {
+    lokasiState.selected = item;
+    var box = $('lokInfo');
+    if (!item) { box.classList.remove('show'); $('lokHint').style.display = ''; return; }
+    var st = lokasiStatus(item);
+    var stLabel = { ok: 'Stok aman', low: 'Hampir habis', out: 'Habis', none: 'Stok tidak diketahui' }[st];
+    var stColor = { ok: 'var(--green)', low: 'var(--amber)', out: 'var(--red)', none: 'var(--muted)' }[st];
+    $('lokInfoName').textContent = item.nama;
+    $('lokInfoMeta').innerHTML =
+      'Lokasi: <b>' + escapeHtml(parsed ? parsed.label : item.lokasi) + '</b> &middot; Zona ' + escapeHtml(parsed ? parsed.zona : '-') +
+      ', rak ' + (parsed ? parsed.rak : '-') + ', susun ' + (parsed ? parsed.level : '-') + '<br>' +
+      (item.stok === null ? '' : 'Stok: <b style="color:' + stColor + '">' + item.stok.toLocaleString('id-ID') + ' pcs</b> &middot; ') +
+      '<span style="color:' + stColor + '">' + stLabel + '</span>' +
+      (item.ket ? '<br>' + escapeHtml(item.ket) : '');
+    box.classList.add('show');
+    $('lokHint').style.display = 'none';
+  }
+
+  function lokasiRenderChip() {
+    var chip = $('lokUnplaced');
+    var n = lokasiUnplaced().length;
+    if (n > 0 && lokasiState.rows.length > 0) {
+      chip.textContent = n + ' card belum punya lokasi — ketuk untuk mengisi';
+      chip.style.display = 'block';
+    } else {
+      chip.style.display = 'none';
+    }
+  }
+
+  function lokasiRender() {
+    if (!lokasiEnsure3d()) return;
+    var info = lokasiState.view3d.setData(lokasiItems());
+    lokasiState.view3d.setFilter($('lokSearch').value);
+    lokasiOnSelect(null);
+    lokasiRenderChip();
+    var unplaced = lokasiUnplaced().length;
+    if (info.placed === 0) {
+      lokasiShowState(state.stock.length
+        ? 'Belum ada lokasi yang diisi. Ketuk tombol + untuk menentukan lokasi tiap card (mis. A-03-2).'
+        : 'Belum ada data card.', false);
+    } else {
+      lokasiShowState('', false);
+    }
+    return { info: info, unplaced: unplaced };
+  }
+
+  async function loadLokasi() {
+    if (!lokasiEnsure3d()) return;
+    lokasiState.view3d.start();
+    if (!isSignedIn()) { lokasiShowState('Belum masuk dengan akun Google. Buka Pengaturan untuk sign-in.', false); return; }
+    if (!state.spreadsheetId) { lokasiShowState('Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.', false); return; }
+    if (!lokasiState.loaded) lokasiShowState('Memuat lokasi gudang...', true);
+    try {
+      var res = await Promise.all([getStockList(), getLokasiList()]);
+      state.stock = res[0];
+      state.invLoadedOnce = true;
+      lokasiState.rows = res[1];
+      lokasiState.loaded = true;
+    } catch (e) {
+      if (!lokasiState.loaded) { lokasiShowState('Gagal memuat: ' + e.message, false); return; }
+      toast(e.message);
+    }
+    lokasiRender();
+  }
+
+  function openLokasiView() {
+    if (!lokasiEnsure3d()) return;
+    lokasiState.view3d.start();
+    if (!lokasiState.loaded || state.autoRefresh) loadLokasi();
+    else lokasiRender();
+  }
+
+  // ---- Ubah / tambah lokasi
+  function lokasiUpdateParsed() {
+    var p = window.Lokasi3D.parseLokasi($('fLokKode').value);
+    $('lokParsed').textContent = p ? ('Zona ' + p.zona + ' · Rak ' + p.rak + ' · Susun ' + p.level + '  →  ' + p.label) : '';
+  }
+  function openLokasiSheet(nama) {
+    var existing = null;
+    if (nama) {
+      var t = String(nama).trim().toLowerCase();
+      existing = lokasiState.rows.filter(function (l) { return l.nama.toLowerCase() === t; })[0] || null;
+    }
+    lokasiState.editing = existing ? existing.nama : null;
+    $('lokCardList').innerHTML = state.stock.map(function (r) { return '<option value="' + escapeHtml(r.nama) + '">'; }).join('');
+    $('fLokNama').value = nama || '';
+    $('fLokKode').value = existing ? existing.lokasi : '';
+    $('fLokKet').value = existing ? existing.ket : '';
+    $('btnLokDelete').style.display = existing ? '' : 'none';
+    lokasiUpdateParsed();
+    $('lokSheet').classList.add('show');
+  }
+  function closeLokasiSheet() { $('lokSheet').classList.remove('show'); }
+
+  async function saveLokasi(nama, kode, ket) {
+    await ensureSheetExists(LOKASI_SHEET, LOKASI_HEADER);
+    var rows = await readRawRows(LOKASI_SHEET);
+    var t = nama.trim().toLowerCase();
+    // Kode tanpa huruf (mis. "3-2") akan dibaca Sheets sebagai tanggal; apostrof memaksa teks.
+    var kodeOut = kode && /^[0-9\-\/.\s]+$/.test(kode) ? "'" + kode : kode;
+    var found = false;
+    var out = [];
+    rows.forEach(function (r) {
+      if (!r[0]) return;
+      if (String(r[0]).trim().toLowerCase() === t) {
+        found = true;
+        if (kode) out.push([nama, kodeOut, ket]);
+      } else {
+        out.push([r[0], r[1] == null ? '' : r[1], r[2] == null ? '' : r[2]]);
+      }
+    });
+    if (!found && kode) out.push([nama, kodeOut, ket]);
+    await rewriteSheetRows(LOKASI_SHEET, LOKASI_HEADER, out);
+  }
+
+  async function submitLokasi(del) {
+    var nama = $('fLokNama').value.trim();
+    var kode = del ? '' : $('fLokKode').value.trim().toUpperCase();
+    if (!nama) { toast('Nama card wajib diisi.'); return; }
+    if (!del && !window.Lokasi3D.parseLokasi(kode)) { toast('Kode lokasi belum valid, mis. A-03-2.'); return; }
+    var btn = del ? $('btnLokDelete') : $('btnLokSave');
+    btn.disabled = true;
+    try {
+      await saveLokasi(nama, kode, del ? '' : $('fLokKet').value.trim());
+      closeLokasiSheet();
+      toast(del ? 'Lokasi dihapus.' : 'Lokasi disimpan.');
+      lokasiState.rows = await getLokasiList();
+      lokasiRender();
+      if (!del) lokasiState.view3d.selectByName(nama, true);
+    } catch (e) {
+      toast('Gagal menyimpan: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $('btnLokAdd').addEventListener('click', function () { openLokasiSheet(''); });
+  $('btnLokReload').addEventListener('click', function () { loadLokasi(); });
+  $('btnLokReset').addEventListener('click', function () { if (lokasiState.view3d) lokasiState.view3d.resetView(); });
+  $('btnLokTop').addEventListener('click', function () { if (lokasiState.view3d) lokasiState.view3d.topView(); });
+  $('btnLokCancel').addEventListener('click', closeLokasiSheet);
+  $('lokSheet').addEventListener('click', function (e) { if (e.target === $('lokSheet')) closeLokasiSheet(); });
+  $('btnLokSave').addEventListener('click', function () { submitLokasi(false); });
+  $('btnLokDelete').addEventListener('click', function () { submitLokasi(true); });
+  $('fLokKode').addEventListener('input', lokasiUpdateParsed);
+  $('btnLokInfoEdit').addEventListener('click', function () { if (lokasiState.selected) openLokasiSheet(lokasiState.selected.nama); });
+  $('btnLokInfoDetail').addEventListener('click', function () { if (lokasiState.selected) openDetail(lokasiState.selected.nama); });
+  $('lokUnplaced').addEventListener('click', function () {
+    var list = lokasiUnplaced();
+    if (!list.length) return;
+    lokasiState.unplacedIdx = lokasiState.unplacedIdx % list.length;
+    openLokasiSheet(list[lokasiState.unplacedIdx].nama);
+    lokasiState.unplacedIdx++;
+  });
+  var lokSearchTimer = null;
+  $('lokSearch').addEventListener('input', function () {
+    clearTimeout(lokSearchTimer);
+    lokSearchTimer = setTimeout(function () {
+      if (!lokasiState.view3d) return;
+      var q = $('lokSearch').value;
+      var n = lokasiState.view3d.setFilter(q);
+      if (q.trim() && n === 0) toast('Tidak ada card/lokasi yang cocok.');
+    }, 250);
+  });
 
   // ================= Kalibrasi: baca/tulis ke Sheets =================
   async function rewriteSheetRows(sheetName, headerRow, dataRows) {
