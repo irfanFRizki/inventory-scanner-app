@@ -21,14 +21,22 @@
   // format 'GOOGLE_OAUTH_CLIENT_ID = ...'; (string literal, satu baris).
   var GOOGLE_OAUTH_CLIENT_ID = '250943179443-0onrfglhn814v2fck81qmqf4cd76es80.apps.googleusercontent.com';
 
-  // ================= Versi web (browser PC) =================
-  // Dipakai HANYA saat halaman dibuka di browser (mis. GitHub Pages). Di dalam
-  // APK nilai ini diabaikan. Isi dengan OAuth Client ID bertipe "Web application"
-  // dari Google Cloud Console; "Authorized JavaScript origins"-nya harus memuat
-  // alamat situs (mis. https://irfanfrizki.github.io). Client ID bukan rahasia.
-  // Nama variabel sengaja berbeda supaya tidak terbaca scripts/patch-android-manifest.js.
-  var GOOGLE_OAUTH_WEB_CLIENT_ID = '250943179443-ebe5pr6ri17j0n07ajc4munkkn61pjkg.apps.googleusercontent.com';
+  // ================= Versi web (browser PC) — HANYA BACA =================
+  // Dipakai HANYA saat halaman dibuka di browser (mis. GitHub Pages); di dalam
+  // APK semua nilai ini diabaikan dan perilaku aplikasi tidak berubah.
+  // Versi web tidak memakai login Google: data dibaca lewat Google Sheets API
+  // dengan API key, jadi spreadsheet WAJIB dibagikan "Siapa saja yang memiliki
+  // link = Pelihat (Viewer)". Siapa pun yang tahu ID + link bisa membaca datanya.
+  // API key bukan rahasia, tapi WAJIB dibatasi di Google Cloud Console:
+  //   - Application restrictions: Websites -> https://irfanfrizki.github.io/*
+  //     (dan http://localhost:8080/* untuk uji lokal)
+  //   - API restrictions: Google Sheets API saja
+  // Nama variabel sengaja tidak memuat "GOOGLE_OAUTH_CLIENT_ID" supaya tidak
+  // terbaca scripts/patch-android-manifest.js.
+  var WEB_SPREADSHEET_ID = '';
+  var WEB_SHEETS_API_KEY = '';
   var IS_WEB = !(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+  if (IS_WEB) document.body.classList.add('web-ro'); // CSS menyembunyikan semua kontrol tulis
 
   var SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
   var USERINFO_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
@@ -177,62 +185,18 @@
     state.oauth.email = await getPref(KEYS.oauthEmail, '');
   }
 
-  // Android: sudah masuk selama ada refresh token. Web (Google Identity Services)
-  // tidak punya refresh token, jadi sudah masuk = access token masih berlaku.
+  // Android: sudah masuk selama ada refresh token. Web: tidak ada login (baca-saja
+  // lewat API key), jadi selalu dianggap siap.
   function isSignedIn() {
-    if (IS_WEB) return !!state.oauth.accessToken && Date.now() < state.oauth.expiresAt;
+    if (IS_WEB) return true;
     return !!state.oauth.refreshToken;
   }
 
-  // ----- Login versi web: Google Identity Services (popup, tanpa client secret) -----
-  var gisLoading = null;
-  function loadGis() {
-    if (window.google && window.google.accounts && window.google.accounts.oauth2) return Promise.resolve();
-    if (gisLoading) return gisLoading;
-    gisLoading = new Promise(function (resolve, reject) {
-      var s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client';
-      s.async = true;
-      s.onload = function () { resolve(); };
-      s.onerror = function () { gisLoading = null; reject(new Error('Gagal memuat Google Sign-In. Cek koneksi internet.')); };
-      document.head.appendChild(s);
-    });
-    return gisLoading;
-  }
-
-  async function webSignIn() {
-    if (!GOOGLE_OAUTH_WEB_CLIENT_ID) {
-      toast('GOOGLE_OAUTH_WEB_CLIENT_ID belum diisi di www/app.js (Client ID tipe Web).');
-      return;
-    }
-    try {
-      await loadGis();
-    } catch (e) { toast(e.message); return; }
-    var client = window.google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_OAUTH_WEB_CLIENT_ID,
-      scope: SHEETS_SCOPE + ' ' + USERINFO_SCOPE,
-      callback: async function (resp) {
-        if (!resp || resp.error || !resp.access_token) {
-          toast('Sign-in gagal: ' + ((resp && (resp.error_description || resp.error)) || 'tidak ada token'));
-          return;
-        }
-        await applyTokenResponse(resp);
-        await fetchUserEmail();
-        toast('Berhasil masuk dengan Google.');
-        renderSignInStatus();
-      },
-      error_callback: function (err) {
-        var t = err && err.type;
-        if (t === 'popup_closed') toast('Sign-in dibatalkan.');
-        else if (t === 'popup_failed_to_open') toast('Popup login diblokir browser. Izinkan popup untuk situs ini.');
-        else toast('Sign-in gagal' + (t ? ': ' + t : '.'));
-      }
-    });
-    client.requestAccessToken({ prompt: '' });
+  function needIdText() {
+    return IS_WEB ? 'Web belum dikonfigurasi (WEB_SPREADSHEET_ID kosong di app.js).' : 'Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.';
   }
 
   async function beginSignIn() {
-    if (IS_WEB) { await webSignIn(); return; }
     if (!GOOGLE_OAUTH_CLIENT_ID) {
       toast('GOOGLE_OAUTH_CLIENT_ID belum diisi (lihat README bagian setup Google Cloud Console).');
       return;
@@ -328,13 +292,6 @@
   }
 
   async function getValidAccessToken() {
-    if (IS_WEB) {
-      if (state.oauth.accessToken && Date.now() < state.oauth.expiresAt) return state.oauth.accessToken;
-      // Token Google Identity Services berlaku sekitar 1 jam dan tidak bisa
-      // diperbarui diam-diam tanpa klik pengguna (popup diblokir browser).
-      renderSignInStatus();
-      throw new Error('Sesi Google habis. Buka Pengaturan → Masuk dgn Google.');
-    }
     if (!state.oauth.refreshToken) throw new Error('Belum sign-in dengan Google. Buka Pengaturan.');
     if (state.oauth.accessToken && Date.now() < state.oauth.expiresAt) return state.oauth.accessToken;
     var tok;
@@ -371,11 +328,7 @@
     await clearPref(KEYS.oauthRefreshToken);
     await clearPref(KEYS.oauthEmail);
     if (token) {
-      if (IS_WEB && window.google && window.google.accounts && window.google.accounts.oauth2) {
-        try { window.google.accounts.oauth2.revoke(token, function () {}); } catch (e) { /* abaikan */ }
-      } else {
-        fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(token)).catch(function () {});
-      }
+      fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(token)).catch(function () {});
     }
     renderSignInStatus();
     toast('Keluar dari akun Google.');
@@ -405,7 +358,8 @@
 
   // ================= Google Sheets API =================
   async function sheetsFetch(pathAndQuery, options, retried) {
-    if (!state.spreadsheetId) throw new Error('Spreadsheet ID belum diatur.');
+    if (!state.spreadsheetId) throw new Error(IS_WEB ? 'Web belum dikonfigurasi (WEB_SPREADSHEET_ID kosong di app.js).' : 'Spreadsheet ID belum diatur.');
+    if (IS_WEB) return sheetsFetchReadOnly(pathAndQuery, options);
     var token = await getValidAccessToken();
     var res = await fetch(SHEETS_API + '/' + state.spreadsheetId + pathAndQuery, Object.assign({}, options, {
       headers: Object.assign({ Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, (options && options.headers) || {})
@@ -419,6 +373,29 @@
     if (!res.ok) {
       var errJson = await res.json().catch(function () { return null; });
       var msg = (errJson && errJson.error && errJson.error.message) || ('HTTP ' + res.status);
+      var e = new Error(msg);
+      e.status = res.status;
+      throw e;
+    }
+    return res.json();
+  }
+
+  // Versi web: hanya GET, pakai API key, tanpa header Authorization/Content-Type
+  // (request sederhana, tanpa preflight CORS). Semua penulisan ke Sheets lewat
+  // sheetsFetch, jadi blokir di sini menjamin versi web tidak bisa mengubah data.
+  async function sheetsFetchReadOnly(pathAndQuery, options) {
+    var method = String((options && options.method) || 'GET').toUpperCase();
+    if (method !== 'GET') throw new Error('Versi web hanya-baca, tidak bisa mengubah data.');
+    if (!WEB_SHEETS_API_KEY) throw new Error('Web belum dikonfigurasi (WEB_SHEETS_API_KEY kosong di app.js).');
+    var url = SHEETS_API + '/' + state.spreadsheetId + pathAndQuery +
+      (pathAndQuery.indexOf('?') === -1 ? '?' : '&') + 'key=' + encodeURIComponent(WEB_SHEETS_API_KEY);
+    var res = await fetch(url);
+    if (!res.ok) {
+      var errJson = await res.json().catch(function () { return null; });
+      var msg = (errJson && errJson.error && errJson.error.message) || ('HTTP ' + res.status);
+      if (res.status === 403 || res.status === 404) {
+        msg += ' — pastikan spreadsheet dibagikan "Siapa saja yang memiliki link: Pelihat" dan API key mengizinkan situs ini.';
+      }
       var e = new Error(msg);
       e.status = res.status;
       throw e;
@@ -661,7 +638,7 @@
       return;
     }
     if (!state.spreadsheetId) {
-      $('mutasiEmptyText').textContent = 'Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.';
+      $('mutasiEmptyText').textContent = needIdText();
       $('mutasiEmpty').style.display = 'flex';
       $('mutasiLoading').style.display = 'none';
       return;
@@ -734,7 +711,8 @@
 
   // ================= Load / Save settings =================
   async function loadSettings() {
-    state.spreadsheetId = await getPref(KEYS.spreadsheetId, '');
+    // Web: Spreadsheet ID tertanam di kode (baca-saja), tidak diisi pengguna.
+    state.spreadsheetId = IS_WEB ? WEB_SPREADSHEET_ID : await getPref(KEYS.spreadsheetId, '');
     state.openMode = await getPref(KEYS.openMode, 'inapp');
     state.confirmOpen = await getPref(KEYS.confirmOpen, false);
     state.vibrate = await getPref(KEYS.vibrate, true);
@@ -833,7 +811,7 @@
       return;
     }
     if (!state.spreadsheetId) {
-      $('invEmptyText').textContent = 'Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.';
+      $('invEmptyText').textContent = needIdText();
       showInvState('invEmpty');
       return;
     }
@@ -1240,14 +1218,7 @@
   // ================= Scan flow =================
   var scanning = false;
 
-  // Android: ML Kit. Web: webcam lewat webscan.js (jsQR / BarcodeDetector).
-  function scanCode(options) {
-    if (IS_WEB) return window.WebScanner.scan(options);
-    return BarcodeScanner.scan(options);
-  }
-
   async function ensureScannerReady() {
-    if (IS_WEB) return;
     try {
       var avail = await BarcodeScanner.isGoogleBarcodeScannerModuleAvailable();
       if (avail && avail.available === false) {
@@ -1266,7 +1237,7 @@
       await ensureScannerReady();
       var options = {};
       if (state.qrOnly) options.formats = ['QrCode'];
-      var result = await scanCode(options);
+      var result = await BarcodeScanner.scan(options);
       var barcodes = (result && result.barcodes) || [];
       if (!barcodes.length) { toast('Tidak ada kode terdeteksi.'); return; }
       await onScanResult(barcodes[0].rawValue || '');
@@ -1310,7 +1281,7 @@
       await ensureScannerReady();
       var options = {};
       if (state.qrOnly) options.formats = ['QrCode'];
-      var result = await scanCode(options);
+      var result = await BarcodeScanner.scan(options);
       var barcodes = (result && result.barcodes) || [];
       if (!barcodes.length) { toast('Tidak ada kode item terdeteksi.'); return; }
       var scannedValue = String(barcodes[0].rawValue || '').trim();
@@ -1521,7 +1492,7 @@
     var unplaced = lokasiUnplaced().length;
     if (info.placed === 0) {
       lokasiShowState(state.stock.length
-        ? 'Belum ada lokasi yang diisi. Ketuk tombol + untuk menentukan lokasi tiap card (mis. A-03-2).'
+        ? (IS_WEB ? 'Belum ada lokasi yang diisi.' : 'Belum ada lokasi yang diisi. Ketuk tombol + untuk menentukan lokasi tiap card (mis. A-03-2).')
         : 'Belum ada data card.', false);
     } else {
       lokasiShowState('', false);
@@ -1533,7 +1504,7 @@
     if (!lokasiEnsure3d()) return;
     lokasiState.view3d.start();
     if (!isSignedIn()) { lokasiShowState('Belum masuk dengan akun Google. Buka Pengaturan untuk sign-in.', false); return; }
-    if (!state.spreadsheetId) { lokasiShowState('Spreadsheet ID belum diatur. Buka Pengaturan untuk mengisinya.', false); return; }
+    if (!state.spreadsheetId) { lokasiShowState(needIdText(), false); return; }
     if (!lokasiState.loaded) lokasiShowState('Memuat lokasi gudang...', true);
     try {
       var res = await Promise.all([getStockList(), getLokasiList()]);
@@ -1907,7 +1878,7 @@
 
     await loadSettings();
     resetKalibrasiParts(null);
-    switchView('scan');
+    switchView(IS_WEB ? 'inv' : 'scan');
   }
 
   init();

@@ -490,6 +490,22 @@
     font-size:11px; color:var(--amber); padding:6px 12px; border-bottom:1px solid var(--line);
     background:var(--panel); cursor:pointer; display:none;
   }
+
+  /* ---- Versi web (hanya baca): sembunyikan semua kontrol tulis / scan / pengaturan ----
+     Kelas web-ro dipasang app.js hanya saat berjalan di browser; di APK tidak ada efek. */
+  body.web-ro .navbtn[data-view="scan"],
+  body.web-ro .navbtn[data-view="kalibrasi"],
+  body.web-ro #btnSettings,
+  body.web-ro #btnGotoSettingsFromInv,
+  body.web-ro #btnScanInvInbound,
+  body.web-ro #btnTrxMasuk,
+  body.web-ro .modal-actions:has(> #btnTrxMasuk),
+  body.web-ro #btnLokAdd,
+  body.web-ro #btnLokInfoMove,
+  body.web-ro #btnLokInfoEdit,
+  body.web-ro #lokMoveTip,
+  body.web-ro #lokMove,
+  body.web-ro #lokUnplaced { display: none !important; }
 </style>
 </head>
 <body>
@@ -916,8 +932,6 @@
 <script src="vendor/app.js"></script>
 <script src="vendor/barcode-scanning.js"></script>
 <script src="vendor/three.min.js"></script>
-<script src="vendor/jsqr.js"></script>
-<script src="webscan.js"></script>
 <script src="lokasi3d.js"></script>
 <script src="app.js"></script>
 </body>

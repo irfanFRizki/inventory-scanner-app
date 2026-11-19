@@ -185,24 +185,27 @@ di langkah 0), buka tab **Actions → Build & Release APK → Run workflow**.
 
 ---
 
-## 6. Versi web (dipakai dari PC, via GitHub Pages)
+## 6. Versi web (hanya baca, dipakai dari PC via GitHub Pages)
 
-Folder `www/` yang sama juga bisa dibuka di browser. Di dalam APK perilakunya tidak berubah; di browser, login dan scan dialihkan ke jalur web:
+Folder `www/` yang sama juga bisa dibuka di browser. Di dalam APK perilakunya tidak berubah. Di browser, aplikasi otomatis masuk **mode hanya-baca**:
 
-| | APK Android | Versi web |
-|---|---|---|
-| Login Google | OAuth PKCE + redirect custom scheme | Google Identity Services (popup), token berlaku ±1 jam lalu masuk ulang |
-| Scan QR | ML Kit | Webcam (`www/webscan.js`: BarcodeDetector bila ada, jika tidak jsQR di `www/vendor/jsqr.js`) |
-| Cek Update | Ada | Disembunyikan |
+- Tab yang tampil: **Inventory** (tanpa `+ Masuk` dan tanpa Scan Masuk), **Stok**, **Mutasi**, **Lokasi** (tanpa tambah/ubah/geser lokasi).
+- Tab Scan Code dan Kalibrasi, serta tombol Pengaturan, disembunyikan.
+- Tidak ada login Google. Spreadsheet ID dan API key tertanam di `www/app.js` (`WEB_SPREADSHEET_ID`, `WEB_SHEETS_API_KEY`).
+- Semua penulisan ke Sheets diblokir di satu titik (`sheetsFetchReadOnly`), jadi web tidak bisa mengubah data walau ada yang mengutak-atik tampilan.
 
 Setup sekali:
 
-1. Google Cloud Console → **Credentials → Create Credentials → OAuth client ID → Web application**. Isi **Authorized JavaScript origins** dengan alamat situs (mis. `https://irfanfrizki.github.io`, tanpa path) dan `http://localhost:8080` untuk uji lokal. Redirect URI dikosongkan.
-2. Isi `GOOGLE_OAUTH_WEB_CLIENT_ID` di `www/app.js` dengan Client ID itu (Client ID Android tidak diubah).
-3. GitHub → **Settings → Pages → Source: GitHub Actions**. Setiap push yang mengubah `www/` ke `main` otomatis dipublikasikan oleh `.github/workflows/pages.yml`.
-4. Akun Google yang login harus ada di **Test users** (kalau app masih Testing) dan punya akses Editor ke spreadsheet.
+1. **Bagikan spreadsheet**: Share → Akses umum → **Siapa saja yang memiliki link: Pelihat (Viewer)**. Artinya siapa pun yang tahu ID dan link-nya bisa membaca data. Repo ini publik, jadi anggap isi sheet bisa dilihat publik.
+2. Google Cloud Console → **APIs & Services → Credentials → Create Credentials → API key**. Lalu **Restrict key**:
+   - *Application restrictions*: Websites → tambahkan `https://irfanfrizki.github.io/*` dan `http://localhost:8080/*`
+   - *API restrictions*: Restrict key → **Google Sheets API**
+3. Isi `WEB_SPREADSHEET_ID` dan `WEB_SHEETS_API_KEY` di `www/app.js`, lalu commit.
+4. GitHub → **Settings → Pages → Source: GitHub Actions**. Setiap push yang mengubah `www/` ke `main` otomatis dipublikasikan oleh `.github/workflows/pages.yml`.
 
-Uji lokal: `cd www && python3 -m http.server 8080`, lalu buka `http://localhost:8080`. Kamera hanya jalan di HTTPS atau localhost.
+Foto kartu dimuat langsung dari URL di kolom `Foto URL`, jadi file fotonya harus bisa dilihat publik (sama seperti di APK).
+
+Uji lokal: `cd www && python3 -m http.server 8080`, lalu buka `http://localhost:8080`.
 
 ---
 
