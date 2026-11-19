@@ -86,10 +86,23 @@ atau isi manual):
 ```
 Nama Card | Lokasi | Keterangan
 ```
-Kolom `Lokasi` memakai kode `ZONA-RAK-LEVEL`, mis. `A-03-2` = zona A, rak 3,
-susun ke-2 dari bawah (juga dikenali: `A3-2`, `a 3 2`, `RAK A-3-2`). Beberapa
-card boleh berbagi kode yang sama (muat berjejer di satu susun). Card tanpa
-kode lokasi tidak muncul di 3D; jumlahnya ditampilkan di atas peta.
+Kolom `Lokasi` memakai kode `ZONA-RAK-LEVEL[-SISI][-T][-SLOT]`:
+
+| Kode | Artinya |
+|---|---|
+| `A-03-2` | zona A, rak 3, susun ke-2 dari bawah (sisi depan) |
+| `B-01-2-D` / `B-01-2-B` | susun yang sama, sisi **D**epan / **B**elakang |
+| `B-01-2-D-T` | **T**umpukan di atas barang sisi depan |
+| `B-01-2-D-3` | slot ke-3 dari kiri (opsional; tanpa nomor, card mengisi dari kiri) |
+
+Tiap sisi muat 8 kotak per baris; jumlah item boleh berapa saja (slot sisanya
+kosong). Kode juga dikenali dalam bentuk `A3-2`, `a 3 2`, `RAK A-3-2`. Card
+tanpa kode lokasi tidak muncul di 3D; jumlahnya ditampilkan di atas peta.
+
+**Geser di peta:** ketuk card → **Geser** → seret kotak yang menyala ke slot
+kosong → lepas. Kode lokasi baru terisi otomatis; ketuk **Simpan Lokasi**
+untuk menyimpannya ke sheet. Tujuan hanya slot kosong di rak yang sudah ada
+(rak baru dibuat lewat tombol **+**).
 
 **Kalibrasi_Card** (buat manual, atau isi dari project GAS lama kamu kalau
 sudah ada datanya — cukup salin/pindahkan sheet-nya ke spreadsheet baru):

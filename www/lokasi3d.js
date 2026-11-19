@@ -11,11 +11,13 @@
   'use strict';
 
   // ---------------------------------------------------------------- Parser
-  // Format kode lokasi:  ZONA-RAK-LEVEL[-POSISI]
-  //   "A-03-2"  = zona A, rak 3, level (susun) 2 dari bawah
-  //   "A3-2", "A 3 2", "a.3.2", "RAK A-3-2" juga dikenali.
-  // Level default 1 (paling bawah). Teks tanpa angka (mis. "GUDANG DEPAN")
-  // dianggap satu zona dengan rak 1 level 1.
+  // Format kode lokasi:  ZONA-RAK-LEVEL[-SISI][-T][-SLOT]
+  //   A-03-2        zona A, rak 3, susun 2 (sisi depan)
+  //   B-01-2-D      ... sisi depan        B-01-2-B     ... sisi belakang
+  //   B-01-2-D-T    ... tumpukan di atas barang sisi depan (T = tumpuk)
+  //   B-01-2-D-3    slot ke-3 dari kiri (opsional)   B-01-2-B-T-3  tumpukan slot ke-3
+  // Juga dikenali: "A3-2", "a 3 2", "RAK A-3-2". Teks tanpa angka (mis.
+  // "GUDANG DEPAN") dianggap satu zona dengan rak 1 level 1.
   function pad2(n) { return n < 10 ? '0' + n : String(n); }
 
   function parseLokasi(text) {
@@ -25,28 +27,82 @@
       .replace(/([A-Z])(\d)/g, '$1-$2')
       .replace(/(\d)([A-Z])/g, '$1-$2');
     var tokens = norm.split(/[\s\-._\/,]+/).filter(Boolean);
-    var words = [], nums = [];
+    var words = [], nums = [], sisi = null, tumpuk = false, seenNum = false;
     tokens.forEach(function (t) {
-      if (/^\d+$/.test(t)) nums.push(parseInt(t, 10));
-      else if (t !== 'RAK' && t !== 'ZONA') words.push(t);
+      if (/^\d+$/.test(t)) { nums.push(parseInt(t, 10)); seenNum = true; return; }
+      if (t === 'RAK' || t === 'ZONA') return;
+      if (seenNum) {                       // huruf sesudah angka = penanda sisi / tumpuk
+        if (t === 'D' || t === 'DEPAN') sisi = 'D';
+        else if (t === 'B' || t === 'BELAKANG') sisi = 'B';
+        else if (t === 'T' || t === 'TUMPUK') tumpuk = true;
+        return;
+      }
+      words.push(t);                       // huruf sebelum angka = nama zona
     });
     if (!words.length && !nums.length) return null;
     var zona = words.length ? words.join(' ') : 'A';
     var rak = nums.length ? nums[0] : 1;
     var level = nums.length > 1 ? Math.max(1, nums[1]) : 1;
     var pos = nums.length > 2 ? nums[2] : 0;
+    var side = sisi || 'D';
+    var label = zona;
+    if (nums.length) {
+      label = zona + '-' + pad2(rak) + '-' + level;
+      if (sisi || tumpuk || pos) label += '-' + side;
+      if (tumpuk) label += '-T';
+      if (pos) label += '-' + pos;
+    }
     return {
-      zona: zona, rak: rak, level: level, pos: pos,
-      label: nums.length ? zona + '-' + pad2(rak) + '-' + level : zona,
+      zona: zona, rak: rak, level: level, pos: pos, sisi: side, tumpuk: tumpuk,
+      label: label,
       rackLabel: nums.length ? zona + '-' + pad2(rak) : zona
     };
   }
 
   // ---------------------------------------------------------------- Layout
-  var RACK_W = 3.0, RACK_D = 1.3, RACK_GAP = 0.7, AISLE = 3.2;
+  // Tiap susun punya 2 sisi (depan = +z, belakang = -z), masing-masing COLS slot
+  // berjejer kiri-ke-kanan. Tier 0 = di atas papan rak, tier 1 = tumpukan (-T).
+  var RACK_W = 3.6, RACK_D = 1.3, RACK_GAP = 0.7, AISLE = 3.2;
   var LEVEL_H = 1.4, SHELF_T = 0.06;
-  var BOX_W = 0.5, BOX_H = 0.36, BOX_PITCH = 0.55;
-  var COLS = 5, ROWS = 2;
+  var BOX_W = 0.36, BOX_H = 0.36, BOX_D = 0.5, PITCH = 0.42, COLS = 8, SIDE_Z = 0.33;
+
+  function slotPos(rack, level, sisi, col, tier) {
+    return {
+      x: rack.x - (COLS * PITCH) / 2 + PITCH / 2 + col * PITCH,
+      y: (level - 1) * LEVEL_H + SHELF_T + tier * BOX_H + BOX_H / 2,
+      z: rack.z + (sisi === 'B' ? -SIDE_Z : SIDE_Z)
+    };
+  }
+  function slotCode(rack, level, sisi, col, tier) {
+    return rack.zona + '-' + pad2(rack.rak) + '-' + level + '-' + sisi + (tier > 0 ? '-T' : '') + '-' + (col + 1);
+  }
+  function byName(a, b) {
+    return String(a.item.nama).localeCompare(String(b.item.nama), 'id', { numeric: true });
+  }
+
+  // Menentukan kolom & tier tiap card dalam satu sisi satu susun.
+  // Slot bernomor (mis. ...-3) dipenuhi dulu; sisanya mengisi dari kiri.
+  function assignSide(entries) {
+    var used = {};
+    function key(t, c) { return t + '|' + c; }
+    [[entries.filter(function (e) { return !e.parsed.tumpuk; }), 0],
+     [entries.filter(function (e) { return e.parsed.tumpuk; }), 1]].forEach(function (g) {
+      var list = g[0], t0 = g[1];
+      list.filter(function (e) { return e.parsed.pos > 0; })
+        .sort(function (a, b) { return (a.parsed.pos - b.parsed.pos) || byName(a, b); })
+        .forEach(function (e) {
+          var col = Math.min(e.parsed.pos, COLS) - 1, t = t0;
+          while (used[key(t, col)]) t++;
+          used[key(t, col)] = true; e.col = col; e.tier = t;
+        });
+      list.filter(function (e) { return !(e.parsed.pos > 0); }).sort(byName).forEach(function (e) {
+        var t = t0, c = 0;
+        while (used[key(t, c)]) { c++; if (c >= COLS) { c = 0; t++; } }
+        used[key(t, c)] = true; e.col = c; e.tier = t;
+      });
+    });
+    return used;
+  }
 
   // items: [{ nama, lokasi, ... }]. Item tanpa lokasi valid dilewati.
   function layout(items) {
@@ -56,7 +112,8 @@
       if (!p) return;
       var z = zonesMap[p.zona] || (zonesMap[p.zona] = { name: p.zona, racks: {} });
       var r = z.racks[p.rak] || (z.racks[p.rak] = { zona: p.zona, rak: p.rak, label: p.rackLabel, levels: {} });
-      (r.levels[p.level] || (r.levels[p.level] = [])).push({ item: it, parsed: p });
+      var lv = r.levels[p.level] || (r.levels[p.level] = { D: [], B: [] });
+      lv[p.sisi].push({ item: it, parsed: p });
     });
 
     var zoneNames = Object.keys(zonesMap).sort(function (a, b) { return a.localeCompare(b, 'id', { numeric: true }); });
@@ -69,7 +126,7 @@
       });
     });
 
-    var zones = [], racks = [];
+    var zones = [], racks = [], occ = {};
     var bounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
     var first = true;
     function grow(x0, x1, z0, z1) {
@@ -88,23 +145,18 @@
         var rx = ri * (RACK_W + RACK_GAP);
         var rack = { zona: zn, rak: rn, label: rdef.label, x: rx, z: rz, cards: [] };
         Object.keys(rdef.levels).map(Number).forEach(function (lv) {
-          var list = rdef.levels[lv].slice().sort(function (a, b) {
-            return (a.parsed.pos - b.parsed.pos) || String(a.item.nama).localeCompare(String(b.item.nama), 'id', { numeric: true });
-          });
-          var shelfTop = (lv - 1) * LEVEL_H + SHELF_T;
-          list.forEach(function (e, i) {
-            var perTier = COLS * ROWS;
-            var tier = Math.floor(i / perTier);
-            var inTier = i % perTier;
-            var col = inTier % COLS, row = Math.floor(inTier / COLS);
-            var c = {
-              item: e.item, parsed: e.parsed, rack: rack,
-              x: rx - RACK_W / 2 + 0.35 + col * BOX_PITCH,
-              y: shelfTop + tier * BOX_H + BOX_H / 2,
-              z: rz - RACK_D / 2 + 0.4 + row * BOX_PITCH
-            };
-            rack.cards.push(c);
-            placedItems.push(c);
+          ['D', 'B'].forEach(function (sisi) {
+            var entries = rdef.levels[lv][sisi];
+            if (!entries.length) return;
+            assignSide(entries);
+            entries.forEach(function (e) {
+              var pp = slotPos(rack, lv, sisi, e.col, e.tier);
+              var c = { item: e.item, parsed: e.parsed, rack: rack, level: lv, sisi: sisi, col: e.col, tier: e.tier,
+                        x: pp.x, y: pp.y, z: pp.z };
+              occ[rack.zona + '|' + rack.rak + '|' + lv + '|' + sisi + '|' + e.tier + '|' + e.col] = true;
+              rack.cards.push(c);
+              placedItems.push(c);
+            });
           });
         });
         zone.racks.push(rack);
@@ -118,7 +170,27 @@
       zones.push(zone);
     });
 
-    return { zones: zones, racks: racks, placed: placedItems, maxLevel: maxLevel, bounds: bounds,
+    // Slot kosong yang bisa jadi tujuan geser: tier 0 bebas, tier 1 hanya di atas slot yang terisi.
+    var slots = [];
+    racks.forEach(function (rack) {
+      for (var lv = 1; lv <= maxLevel; lv++) {
+        ['D', 'B'].forEach(function (sisi) {
+          for (var col = 0; col < COLS; col++) {
+            var k0 = rack.zona + '|' + rack.rak + '|' + lv + '|' + sisi + '|0|' + col;
+            var k1 = rack.zona + '|' + rack.rak + '|' + lv + '|' + sisi + '|1|' + col;
+            if (!occ[k0]) {
+              var p0 = slotPos(rack, lv, sisi, col, 0);
+              slots.push({ rack: rack, level: lv, sisi: sisi, col: col, tier: 0, x: p0.x, y: p0.y, z: p0.z, code: slotCode(rack, lv, sisi, col, 0) });
+            } else if (!occ[k1]) {
+              var p1 = slotPos(rack, lv, sisi, col, 1);
+              slots.push({ rack: rack, level: lv, sisi: sisi, col: col, tier: 1, x: p1.x, y: p1.y, z: p1.z, code: slotCode(rack, lv, sisi, col, 1) });
+            }
+          }
+        });
+      }
+    });
+
+    return { zones: zones, racks: racks, placed: placedItems, slots: slots, maxLevel: maxLevel, bounds: bounds,
              dims: { RACK_W: RACK_W, RACK_D: RACK_D, LEVEL_H: LEVEL_H, SHELF_T: SHELF_T, BOX_W: BOX_W, BOX_H: BOX_H } };
   }
 
@@ -288,7 +360,7 @@
       // satu geometri dipakai ulang oleh semua rak/card
       var postGeo = track(new THREE.BoxGeometry(0.08, rackH, 0.08));
       var shelfGeo = track(new THREE.BoxGeometry(RACK_W, SHELF_T, RACK_D));
-      var boxGeo = track(new THREE.BoxGeometry(BOX_W, BOX_H, BOX_W));
+      var boxGeo = track(new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D));
 
       data.zones.forEach(function (zone) {
         // alas zona
@@ -408,6 +480,7 @@
 
     // ---- seleksi / filter
     function setSelected(mesh, silent) {
+      if (mesh !== selected) { cancelMove(); moveMode = false; }
       var prev = selected;
       selected = mesh || null;
       if (prev) applyMaterial(prev);
@@ -447,6 +520,7 @@
 
     // ---- input sentuh/mouse
     var pointers = {}, nPtr = 0, tapStart = null, lastPinch = 0, lastMid = null;
+    var moveMode = false, drag = null, pending = null;   // geser card ke slot lain
     var raycaster = new THREE.Raycaster();
     var ndc = new THREE.Vector2();
 
@@ -469,11 +543,49 @@
       view.target.x += (-dx * rx + dy * fx) * s;
       view.target.z += (-dx * rz + dy * fz) * s;
     }
+    var tmpV = new THREE.Vector3();
+    // Slot kosong yang paling dekat dengan sinar dari jari/kursor.
+    function nearestSlot(clientX, clientY) {
+      if (!data || !data.slots.length) return null;
+      var r = el.getBoundingClientRect();
+      ndc.x = ((clientX - r.left) / r.width) * 2 - 1;
+      ndc.y = -((clientY - r.top) / r.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      var best = null, bestScore = 1e9;
+      for (var i = 0; i < data.slots.length; i++) {
+        var sl = data.slots[i];
+        tmpV.set(sl.x, sl.y, sl.z);
+        var d2 = raycaster.ray.distanceSqToPoint(tmpV);
+        if (d2 > 0.16) continue;
+        var score = d2 + 0.00002 * camera.position.distanceToSquared(tmpV);
+        if (score < bestScore) { bestScore = score; best = sl; }
+      }
+      return best;
+    }
+    function nearSelected(clientX, clientY) {
+      if (!selected) return false;
+      var r = el.getBoundingClientRect();
+      tmpV.copy(selected.position).project(camera);
+      var sx = (tmpV.x + 1) / 2 * r.width + r.left, sy = (1 - tmpV.y) / 2 * r.height + r.top;
+      return Math.sqrt(Math.pow(sx - clientX, 2) + Math.pow(sy - clientY, 2)) < 34;
+    }
+    function cancelMove() {
+      if (drag) { selected.position.copy(drag.orig); drag = null; }
+      if (pending) { pending.mesh.position.copy(pending.orig); pending = null; }
+      dirty = true;
+    }
+
     el.addEventListener('pointerdown', function (e) {
       try { el.setPointerCapture(e.pointerId); } catch (x) { /* abaikan */ }
       pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
       nPtr = Object.keys(pointers).length;
       goal = null;
+      if (nPtr >= 2 && drag) cancelMove();
+      if (nPtr === 1 && moveMode && selected && !pending && nearSelected(e.clientX, e.clientY)) {
+        drag = { orig: selected.position.clone(), slot: null };
+        tapStart = null;
+        return;
+      }
       if (nPtr === 1) tapStart = { x: e.clientX, y: e.clientY, t: Date.now(), moved: 0 };
       else { tapStart = null; lastPinch = 0; lastMid = null; }
     });
@@ -482,6 +594,16 @@
       if (!p) return;
       var dx = e.clientX - p.x, dy = e.clientY - p.y;
       p.x = e.clientX; p.y = e.clientY;
+      if (drag) {
+        var sl = nearestSlot(e.clientX, e.clientY);
+        if (sl) {
+          drag.slot = sl;
+          selected.position.set(sl.x, sl.y, sl.z);
+          if (opts.onDrag) opts.onDrag(sl.code);
+        }
+        dirty = true;
+        return;
+      }
       if (nPtr === 1) {
         if (tapStart) tapStart.moved += Math.abs(dx) + Math.abs(dy);
         view.yaw -= dx * 0.0065;
@@ -498,6 +620,18 @@
     });
     function endPointer(e) {
       if (!pointers[e.pointerId]) return;
+      if (drag) {
+        var d = drag; drag = null;
+        delete pointers[e.pointerId]; nPtr = Object.keys(pointers).length;
+        if (e.type === 'pointerup' && d.slot) {
+          pending = { mesh: selected, orig: d.orig, slot: d.slot };
+          if (opts.onMove) opts.onMove(selected.userData.item, d.slot);
+        } else {
+          selected.position.copy(d.orig);
+        }
+        dirty = true;
+        return;
+      }
       var wasTap = nPtr === 1 && tapStart && tapStart.moved < 8 && (Date.now() - tapStart.t) < 450;
       delete pointers[e.pointerId];
       nPtr = Object.keys(pointers).length;
@@ -559,6 +693,12 @@
 
     return {
       setData: setData, setFilter: setFilter, refreshStatus: refreshStatus,
+      setMoveMode: function (on) { moveMode = !!on && !!selected; if (!moveMode) cancelMove(); return moveMode; },
+      cancelMove: cancelMove,
+      _test: { get slots() { return data ? data.slots : []; }, project: function (x, y, z) {
+        var v = new THREE.Vector3(x, y, z).project(camera), r = el.getBoundingClientRect();
+        return { x: (v.x + 1) / 2 * r.width + r.left, y: (1 - v.y) / 2 * r.height + r.top };
+      }, get selectedPos() { return selected ? selected.position : null; } },
       selectByName: selectByName, clearSelection: function () { setSelected(null, true); },
       resetView: function () { resetView(false); }, topView: topView,
       start: start, stop: stop, dispose: dispose,
