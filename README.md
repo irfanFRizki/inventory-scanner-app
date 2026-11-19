@@ -185,6 +185,27 @@ di langkah 0), buka tab **Actions → Build & Release APK → Run workflow**.
 
 ---
 
+## 6. Versi web (dipakai dari PC, via GitHub Pages)
+
+Folder `www/` yang sama juga bisa dibuka di browser. Di dalam APK perilakunya tidak berubah; di browser, login dan scan dialihkan ke jalur web:
+
+| | APK Android | Versi web |
+|---|---|---|
+| Login Google | OAuth PKCE + redirect custom scheme | Google Identity Services (popup), token berlaku ±1 jam lalu masuk ulang |
+| Scan QR | ML Kit | Webcam (`www/webscan.js`: BarcodeDetector bila ada, jika tidak jsQR di `www/vendor/jsqr.js`) |
+| Cek Update | Ada | Disembunyikan |
+
+Setup sekali:
+
+1. Google Cloud Console → **Credentials → Create Credentials → OAuth client ID → Web application**. Isi **Authorized JavaScript origins** dengan alamat situs (mis. `https://irfanfrizki.github.io`, tanpa path) dan `http://localhost:8080` untuk uji lokal. Redirect URI dikosongkan.
+2. Isi `GOOGLE_OAUTH_WEB_CLIENT_ID` di `www/app.js` dengan Client ID itu (Client ID Android tidak diubah).
+3. GitHub → **Settings → Pages → Source: GitHub Actions**. Setiap push yang mengubah `www/` ke `main` otomatis dipublikasikan oleh `.github/workflows/pages.yml`.
+4. Akun Google yang login harus ada di **Test users** (kalau app masih Testing) dan punya akses Editor ke spreadsheet.
+
+Uji lokal: `cd www && python3 -m http.server 8080`, lalu buka `http://localhost:8080`. Kamera hanya jalan di HTTPS atau localhost.
+
+---
+
 ## Struktur folder
 
 ```

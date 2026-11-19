@@ -21,6 +21,15 @@
   // format 'GOOGLE_OAUTH_CLIENT_ID = ...'; (string literal, satu baris).
   var GOOGLE_OAUTH_CLIENT_ID = '250943179443-0onrfglhn814v2fck81qmqf4cd76es80.apps.googleusercontent.com';
 
+  // ================= Versi web (browser PC) =================
+  // Dipakai HANYA saat halaman dibuka di browser (mis. GitHub Pages). Di dalam
+  // APK nilai ini diabaikan. Isi dengan OAuth Client ID bertipe "Web application"
+  // dari Google Cloud Console; "Authorized JavaScript origins"-nya harus memuat
+  // alamat situs (mis. https://irfanfrizki.github.io). Client ID bukan rahasia.
+  // Nama variabel sengaja berbeda supaya tidak terbaca scripts/patch-android-manifest.js.
+  var GOOGLE_OAUTH_WEB_CLIENT_ID = '250943179443-ebe5pr6ri17j0n07ajc4munkkn61pjkg.apps.googleusercontent.com';
+  var IS_WEB = !(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
+
   var SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
   var USERINFO_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
   var TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
@@ -168,9 +177,62 @@
     state.oauth.email = await getPref(KEYS.oauthEmail, '');
   }
 
-  function isSignedIn() { return !!state.oauth.refreshToken; }
+  // Android: sudah masuk selama ada refresh token. Web (Google Identity Services)
+  // tidak punya refresh token, jadi sudah masuk = access token masih berlaku.
+  function isSignedIn() {
+    if (IS_WEB) return !!state.oauth.accessToken && Date.now() < state.oauth.expiresAt;
+    return !!state.oauth.refreshToken;
+  }
+
+  // ----- Login versi web: Google Identity Services (popup, tanpa client secret) -----
+  var gisLoading = null;
+  function loadGis() {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) return Promise.resolve();
+    if (gisLoading) return gisLoading;
+    gisLoading = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://accounts.google.com/gsi/client';
+      s.async = true;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { gisLoading = null; reject(new Error('Gagal memuat Google Sign-In. Cek koneksi internet.')); };
+      document.head.appendChild(s);
+    });
+    return gisLoading;
+  }
+
+  async function webSignIn() {
+    if (!GOOGLE_OAUTH_WEB_CLIENT_ID) {
+      toast('GOOGLE_OAUTH_WEB_CLIENT_ID belum diisi di www/app.js (Client ID tipe Web).');
+      return;
+    }
+    try {
+      await loadGis();
+    } catch (e) { toast(e.message); return; }
+    var client = window.google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_OAUTH_WEB_CLIENT_ID,
+      scope: SHEETS_SCOPE + ' ' + USERINFO_SCOPE,
+      callback: async function (resp) {
+        if (!resp || resp.error || !resp.access_token) {
+          toast('Sign-in gagal: ' + ((resp && (resp.error_description || resp.error)) || 'tidak ada token'));
+          return;
+        }
+        await applyTokenResponse(resp);
+        await fetchUserEmail();
+        toast('Berhasil masuk dengan Google.');
+        renderSignInStatus();
+      },
+      error_callback: function (err) {
+        var t = err && err.type;
+        if (t === 'popup_closed') toast('Sign-in dibatalkan.');
+        else if (t === 'popup_failed_to_open') toast('Popup login diblokir browser. Izinkan popup untuk situs ini.');
+        else toast('Sign-in gagal' + (t ? ': ' + t : '.'));
+      }
+    });
+    client.requestAccessToken({ prompt: '' });
+  }
 
   async function beginSignIn() {
+    if (IS_WEB) { await webSignIn(); return; }
     if (!GOOGLE_OAUTH_CLIENT_ID) {
       toast('GOOGLE_OAUTH_CLIENT_ID belum diisi (lihat README bagian setup Google Cloud Console).');
       return;
@@ -266,6 +328,13 @@
   }
 
   async function getValidAccessToken() {
+    if (IS_WEB) {
+      if (state.oauth.accessToken && Date.now() < state.oauth.expiresAt) return state.oauth.accessToken;
+      // Token Google Identity Services berlaku sekitar 1 jam dan tidak bisa
+      // diperbarui diam-diam tanpa klik pengguna (popup diblokir browser).
+      renderSignInStatus();
+      throw new Error('Sesi Google habis. Buka Pengaturan → Masuk dgn Google.');
+    }
     if (!state.oauth.refreshToken) throw new Error('Belum sign-in dengan Google. Buka Pengaturan.');
     if (state.oauth.accessToken && Date.now() < state.oauth.expiresAt) return state.oauth.accessToken;
     var tok;
@@ -302,7 +371,11 @@
     await clearPref(KEYS.oauthRefreshToken);
     await clearPref(KEYS.oauthEmail);
     if (token) {
-      fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(token)).catch(function () {});
+      if (IS_WEB && window.google && window.google.accounts && window.google.accounts.oauth2) {
+        try { window.google.accounts.oauth2.revoke(token, function () {}); } catch (e) { /* abaikan */ }
+      } else {
+        fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(token)).catch(function () {});
+      }
     }
     renderSignInStatus();
     toast('Keluar dari akun Google.');
@@ -1167,7 +1240,14 @@
   // ================= Scan flow =================
   var scanning = false;
 
+  // Android: ML Kit. Web: webcam lewat webscan.js (jsQR / BarcodeDetector).
+  function scanCode(options) {
+    if (IS_WEB) return window.WebScanner.scan(options);
+    return BarcodeScanner.scan(options);
+  }
+
   async function ensureScannerReady() {
+    if (IS_WEB) return;
     try {
       var avail = await BarcodeScanner.isGoogleBarcodeScannerModuleAvailable();
       if (avail && avail.available === false) {
@@ -1186,7 +1266,7 @@
       await ensureScannerReady();
       var options = {};
       if (state.qrOnly) options.formats = ['QrCode'];
-      var result = await BarcodeScanner.scan(options);
+      var result = await scanCode(options);
       var barcodes = (result && result.barcodes) || [];
       if (!barcodes.length) { toast('Tidak ada kode terdeteksi.'); return; }
       await onScanResult(barcodes[0].rawValue || '');
@@ -1230,7 +1310,7 @@
       await ensureScannerReady();
       var options = {};
       if (state.qrOnly) options.formats = ['QrCode'];
-      var result = await BarcodeScanner.scan(options);
+      var result = await scanCode(options);
       var barcodes = (result && result.barcodes) || [];
       if (!barcodes.length) { toast('Tidak ada kode item terdeteksi.'); return; }
       var scannedValue = String(barcodes[0].rawValue || '').trim();
@@ -1814,10 +1894,16 @@
   // ================= Init =================
   async function init() {
     $('verLabel').textContent = 'v' + APP_VERSION;
-    try {
-      var info = await App.getInfo();
-      if (info && info.version) { APP_VERSION = info.version; $('verLabel').textContent = 'v' + APP_VERSION; }
-    } catch (e) { /* web preview: getInfo tidak tersedia */ }
+    if (IS_WEB) {
+      // Versi web selalu yang terbaru; "Cek Update APK" tidak relevan di sini.
+      $('verLabel').textContent = 'Versi web (selalu terbaru)';
+      $('btnCheckUpdate').style.display = 'none';
+    } else {
+      try {
+        var info = await App.getInfo();
+        if (info && info.version) { APP_VERSION = info.version; $('verLabel').textContent = 'v' + APP_VERSION; }
+      } catch (e) { /* web preview: getInfo tidak tersedia */ }
+    }
 
     await loadSettings();
     resetKalibrasiParts(null);
