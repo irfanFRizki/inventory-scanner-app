@@ -33,8 +33,8 @@
   //   - API restrictions: Google Sheets API saja
   // Nama variabel sengaja tidak memuat "GOOGLE_OAUTH_CLIENT_ID" supaya tidak
   // terbaca scripts/patch-android-manifest.js.
-  var WEB_SPREADSHEET_ID = '';
-  var WEB_SHEETS_API_KEY = '';
+  var WEB_SPREADSHEET_ID = '1CqO94Co6UxJncVYvYVI32a_K1PRdwtjYbzem6QPQy28';
+  var WEB_SHEETS_API_KEY = 'AIzaSyDb4dXYvql5I83cvfiOCAdVjfzVo7QBiRo';
   var IS_WEB = !(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
   if (IS_WEB) document.body.classList.add('web-ro'); // CSS menyembunyikan semua kontrol tulis
 
