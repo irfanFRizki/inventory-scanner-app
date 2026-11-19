@@ -27,7 +27,7 @@
   // dari Google Cloud Console; "Authorized JavaScript origins"-nya harus memuat
   // alamat situs (mis. https://irfanfrizki.github.io). Client ID bukan rahasia.
   // Nama variabel sengaja berbeda supaya tidak terbaca scripts/patch-android-manifest.js.
-  var GOOGLE_OAUTH_WEB_CLIENT_ID = '';
+  var GOOGLE_OAUTH_WEB_CLIENT_ID = '250943179443-ebe5pr6ri17j0n07ajc4munkkn61pjkg.apps.googleusercontent.com';
   var IS_WEB = !(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
 
   var SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
