@@ -506,6 +506,27 @@
   body.web-ro #lokMoveTip,
   body.web-ro #lokMove,
   body.web-ro #lokUnplaced { display: none !important; }
+
+  /* ---- Versi web: ukuran disesuaikan layar PC (hanya di atas 700px) ----
+     Tanpa ini, tampilan HP melebar penuh: katalog 6 kolom dengan foto ~300px. */
+  @media (min-width:700px){
+    body.web-ro{ background:#06080a; }
+    body.web-ro #app{
+      max-width:1200px; margin:0 auto; background:var(--bg);
+      border-left:1px solid var(--line); border-right:1px solid var(--line);
+    }
+    /* Kartu berukuran tetap ~150px, jumlah kolom menyesuaikan lebar layar.
+       #stockGrid punya style inline 2 kolom, jadi perlu !important. */
+    body.web-ro .catalog-grid,
+    body.web-ro #stockGrid{
+      grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)) !important;
+      gap:10px !important;
+    }
+    body.web-ro #mutasiList{ max-width:860px; margin:0 auto; width:100%; }
+    /* Detail card tampil di tengah layar, bukan menempel di dasar layar lebar. */
+    body.web-ro .sheet-backdrop{ align-items:center; }
+    body.web-ro .sheet-panel{ border-radius:18px; }
+  }
 </style>
 </head>
 <body>
