@@ -40,14 +40,13 @@ kamu tentukan lewat **Spreadsheet ID**.
    - Application type: **Android**
    - Package name: `com.irfan.invscanner` (samakan dengan `capacitor.config.json`
      kalau kamu ubah `appId`)
-   - SHA-1 certificate fingerprint: ambil dari keystore signing kamu:
+   - SHA-1 certificate fingerprint: ambil dari keystore signing milikmu sendiri
+     (jangan pernah commit keystore ke repo):
      ```bash
-     keytool -list -v -keystore ci/release.keystore -alias scanner-gudang -storepass scannergudang
+     keytool -list -v -keystore path/ke/release.keystore -alias scanner-gudang
      ```
-     (keystore ini yang di-generate otomatis oleh GitHub Actions — lihat
-     bagian 3. Kalau belum ada, build sekali dulu lewat `workflow_dispatch`
-     manual di tab Actions supaya `ci/release.keystore` ter-generate & ter-commit,
-     baru ambil SHA-1-nya)
+     (jika baru bermigrasi ke keystore baru, daftarkan SHA-1 keystore baru tersebut
+     ke OAuth client ID Android di Google Cloud Console)
    - Simpan — kamu akan mendapat **Client ID** berbentuk
      `xxxxxxxxxx-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.apps.googleusercontent.com`
 
@@ -138,17 +137,38 @@ scope `repo` + `workflow`) sebagai password saat diminta.
 
 ---
 
-## 3. Build APK — tanpa setup keystore/secrets manual
+## 3. Build APK & Setup GitHub Secrets
 
-Workflow `.github/workflows/build-release.yml` mengurus semuanya:
+Workflow `.github/workflows/build-release.yml` mengurus build Android menggunakan keystore yang disimpan di **GitHub Secrets** (tidak di-commit ke repo):
 
 - Folder `android/` dibuat otomatis tiap run (`npx cap add android`)
 - `scripts/patch-android-manifest.js` menyisipkan intent-filter redirect OAuth
   ke `AndroidManifest.xml` berdasarkan `GOOGLE_OAUTH_CLIENT_ID` di `www/app.js`
-- Keystore signing dibuat **otomatis sekali** di build pertama, lalu
-  di-commit balik ke repo (folder `ci/`) supaya semua build berikutnya pakai
-  tanda tangan yang sama — jadi update APK bisa menimpa versi lama tanpa
-  perlu uninstall dulu
+- Keystore signing didekode sementara dari Secret ke path ter-ignore (`ci/release.keystore`)
+  selama build lalu dihapus kembali; build akan gagal jika salah satu secret belum diset.
+- Build APK tidak pernah menerima `WEB_SHEETS_API_KEY` (di dalam APK nilai di `www/app.js`
+  tetap berupa placeholder `__WEB_SHEETS_API_KEY__`).
+
+Buat keystore lokal (sekali saja, simpan cadangannya di tempat aman di luar repo):
+
+```bash
+keytool -genkeypair -v \
+  -keystore release.keystore \
+  -alias scanner-gudang \
+  -keyalg RSA -keysize 2048 -validity 10000
+base64 -w 0 release.keystore
+```
+
+Lalu buka **Settings → Secrets and variables → Actions → New repository secret**
+dan tambahkan secret berikut:
+
+| Secret | Isi |
+|---|---|
+| `RELEASE_KEYSTORE_BASE64` | Output base64 satu baris dari `release.keystore` |
+| `RELEASE_KEYSTORE_PASSWORD` | Password keystore (`-storepass`) |
+| `RELEASE_KEY_ALIAS` | Alias key (mis. `scanner-gudang`) |
+| `RELEASE_KEY_PASSWORD` | Password key (`-keypass`) |
+| `WEB_SHEETS_API_KEY` | API key Google Sheets untuk versi web GitHub Pages (lihat bagian 6) |
 
 Build & rilis APK tinggal push tag:
 
@@ -157,8 +177,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Untuk build manual (tanpa tag, mis. untuk ambil SHA-1 keystore pertama kali
-di langkah 0), buka tab **Actions → Build & Release APK → Run workflow**.
+Untuk build manual (tanpa tag), buka tab **Actions → Build & Release APK → Run workflow**.
 
 ---
 
@@ -191,21 +210,27 @@ Folder `www/` yang sama juga bisa dibuka di browser. Di dalam APK perilakunya ti
 
 - Tab yang tampil: **Inventory** (tanpa `+ Masuk` dan tanpa Scan Masuk), **Stok**, **Mutasi**, **Lokasi** (tanpa tambah/ubah/geser lokasi).
 - Tab Scan Code dan Kalibrasi, serta tombol Pengaturan, disembunyikan.
-- Tidak ada login Google. Spreadsheet ID dan API key tertanam di `www/app.js` (`WEB_SPREADSHEET_ID`, `WEB_SHEETS_API_KEY`).
+- Tidak ada login Google. Spreadsheet ID (`WEB_SPREADSHEET_ID`) ada di `www/app.js`, sedangkan API key (`WEB_SHEETS_API_KEY`) disimpan sebagai **GitHub Secret** (`WEB_SHEETS_API_KEY`) dan disuntikkan oleh `.github/workflows/pages.yml` **hanya** ke salinan staging saat deploy GitHub Pages (source `www/app.js` di repo tetap memakai placeholder `__WEB_SHEETS_API_KEY__`, sehingga build APK tidak pernah membawa API key).
 - Semua penulisan ke Sheets diblokir di satu titik (`sheetsFetchReadOnly`), jadi web tidak bisa mengubah data walau ada yang mengutak-atik tampilan.
 
 Setup sekali:
 
-1. **Bagikan spreadsheet**: Share → Akses umum → **Siapa saja yang memiliki link: Pelihat (Viewer)**. Artinya siapa pun yang tahu ID dan link-nya bisa membaca data. Repo ini publik, jadi anggap isi sheet bisa dilihat publik.
-2. Google Cloud Console → **APIs & Services → Credentials → Create Credentials → API key**. Lalu **Restrict key**:
-   - *Application restrictions*: Websites → tambahkan `https://irfanfrizki.github.io/*` dan `http://localhost:8080/*`
-   - *API restrictions*: Restrict key → **Google Sheets API**
-3. Isi `WEB_SPREADSHEET_ID` dan `WEB_SHEETS_API_KEY` di `www/app.js`, lalu commit.
-4. GitHub → **Settings → Pages → Source: GitHub Actions**. Setiap push yang mengubah `www/` ke `main` otomatis dipublikasikan oleh `.github/workflows/pages.yml`.
+1. **Bagikan spreadsheet**: Share → Akses umum → **Siapa saja yang memiliki link: Pelihat (Viewer)**. Artinya siapa pun yang tahu ID dan link-nya bisa membaca data. Repo dan web ini bersifat publik, jadi anggap seluruh isi sheet dapat dibaca publik.
+2. Google Cloud Console → **APIs & Services → Credentials → Create Credentials → API key**.
+   > **Penting:** Karena aplikasi web dijalankan di browser sisi klien (GitHub Pages publik), nilai `WEB_SHEETS_API_KEY` yang disuntikkan ke bundle web **akan terlihat oleh siapa pun yang membuka situs**. Menyimpan key di GitHub Secret mencegah key tersebar di source repo/APK, tetapi **tidak** membuatnya rahasia di browser. Oleh karena itu key **WAJIB** dibatasi di Google Cloud Console:
+   - *Application restrictions*: Websites → tambahkan `https://irfanfrizki.github.io/*` (dan `http://localhost:8080/*` bila perlu uji lokal)
+   - *API restrictions*: Restrict key → **Google Sheets API** saja
+3. Pastikan `WEB_SPREADSHEET_ID` di `www/app.js` sudah sesuai, lalu simpan API key tersebut sebagai GitHub Secret bernama `WEB_SHEETS_API_KEY` (**Settings → Secrets and variables → Actions**). Jangan isi nilai key asli ke `www/app.js` (biarkan `'__WEB_SHEETS_API_KEY__'`).
+4. GitHub → **Settings → Pages → Source: GitHub Actions**. Setiap push yang mengubah `www/` ke `main` otomatis menyalin `www/` ke folder staging, menyuntikkan `WEB_SHEETS_API_KEY`, dan mempublikasikan salinan staging lewat `.github/workflows/pages.yml`.
 
 Foto kartu dimuat langsung dari URL di kolom `Foto URL`, jadi file fotonya harus bisa dilihat publik (sama seperti di APK).
 
-Uji lokal: `cd www && python3 -m http.server 8080`, lalu buka `http://localhost:8080`.
+Uji lokal (opsional, pakai salinan staging agar repo tetap bersih):
+```bash
+WEB_SHEETS_API_KEY="API_KEY_KAMU" node scripts/stage-pages.js /tmp/pages-www
+cd /tmp/pages-www && python3 -m http.server 8080
+```
+Lalu buka `http://localhost:8080`.
 
 ---
 

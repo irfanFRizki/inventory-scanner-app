@@ -34,7 +34,7 @@
   // Nama variabel sengaja tidak memuat "GOOGLE_OAUTH_CLIENT_ID" supaya tidak
   // terbaca scripts/patch-android-manifest.js.
   var WEB_SPREADSHEET_ID = '1CqO94Co6UxJncVYvYVI32a_K1PRdwtjYbzem6QPQy28';
-  var WEB_SHEETS_API_KEY = 'AIzaSyDb4dXYvql5I83cvfiOCAdVjfzVo7QBiRo';
+  var WEB_SHEETS_API_KEY = '__WEB_SHEETS_API_KEY__'; // disuntik CI dari GitHub Secret WEB_SHEETS_API_KEY (hanya build web)
   var IS_WEB = !(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
   if (IS_WEB) document.body.classList.add('web-ro'); // CSS menyembunyikan semua kontrol tulis
 
@@ -386,7 +386,7 @@
   async function sheetsFetchReadOnly(pathAndQuery, options) {
     var method = String((options && options.method) || 'GET').toUpperCase();
     if (method !== 'GET') throw new Error('Versi web hanya-baca, tidak bisa mengubah data.');
-    if (!WEB_SHEETS_API_KEY) throw new Error('Web belum dikonfigurasi (WEB_SHEETS_API_KEY kosong di app.js).');
+    if (!WEB_SHEETS_API_KEY || WEB_SHEETS_API_KEY === '__WEB_' + 'SHEETS_API_KEY__') throw new Error('Web belum dikonfigurasi (WEB_SHEETS_API_KEY belum disuntik di app.js).');
     var url = SHEETS_API + '/' + state.spreadsheetId + pathAndQuery +
       (pathAndQuery.indexOf('?') === -1 ? '?' : '&') + 'key=' + encodeURIComponent(WEB_SHEETS_API_KEY);
     var res = await fetch(url);

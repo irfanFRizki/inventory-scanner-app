@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'www/**'
+      - 'scripts/stage-pages.js'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -28,9 +29,17 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Stage www & suntik WEB_SHEETS_API_KEY ke salinan staging
+        env:
+          WEB_SHEETS_API_KEY: ${{ secrets.WEB_SHEETS_API_KEY }}
+          PAGES_STAGING_DIR: ${{ runner.temp }}/pages-www
+        run: node scripts/stage-pages.js "$PAGES_STAGING_DIR"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: www
+          path: ${{ runner.temp }}/pages-www
       - id: deployment
         uses: actions/deploy-pages@v4
