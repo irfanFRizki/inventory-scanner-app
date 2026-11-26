@@ -4,9 +4,10 @@ node_modules/
 # (npx cap add android), jadi TIDAK perlu di-commit.
 android/
 
-# Keystore signing yang di-generate & di-commit otomatis oleh CI SENGAJA
-# tidak di-ignore, supaya semua build memakai tanda tangan yang sama:
-!ci/release.keystore
+# Keystore signing disimpan di GitHub Secrets (tidak pernah di-commit ke repo).
+ci/release.keystore
+*.keystore
+*.jks
 
 *.log
 .DS_Store
