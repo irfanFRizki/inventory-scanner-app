@@ -28,8 +28,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: '20'
       - name: Stage www & suntik WEB_SHEETS_API_KEY ke salinan staging
@@ -37,9 +37,11 @@ jobs:
           WEB_SHEETS_API_KEY: ${{ secrets.WEB_SHEETS_API_KEY }}
           PAGES_STAGING_DIR: ${{ runner.temp }}/pages-www
         run: node scripts/stage-pages.js "$PAGES_STAGING_DIR"
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: ${{ runner.temp }}/pages-www
+      - name: Wait for artifact metadata to be available
+        run: sleep 10
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
