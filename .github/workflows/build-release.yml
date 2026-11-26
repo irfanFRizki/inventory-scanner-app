@@ -10,10 +10,6 @@ on:
 permissions:
   contents: write
 
-env:
-  KS_PASS: scannergudang
-  KS_ALIAS: scanner-gudang
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -36,27 +32,27 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # Build pertama: keystore dibuat di sini lalu di-commit ke repo,
-      # supaya build berikutnya memakai tanda tangan yang sama persis
-      # (penting agar update APK bisa menimpa versi lama tanpa uninstall).
-      - name: Siapkan keystore signing
+      - name: Siapkan keystore signing dari Secrets
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          if [ ! -f ci/release.keystore ]; then
-            echo "Keystore belum ada, membuat baru..."
-            mkdir -p ci
-            keytool -genkeypair -v \
-              -keystore ci/release.keystore \
-              -alias "$KS_ALIAS" \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass "$KS_PASS" -keypass "$KS_PASS" \
-              -dname "CN=Scanner Gudang, OU=Gudang, O=irfanFRizki, L=Jakarta, C=ID"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -f ci/release.keystore
-            git commit -m "CI: buat keystore signing otomatis (sekali saja)"
-            git push origin HEAD:main
-          else
-            echo "Keystore sudah ada, dipakai ulang."
+          missing=""
+          [ -n "$RELEASE_KEYSTORE_BASE64" ] || missing="$missing RELEASE_KEYSTORE_BASE64"
+          [ -n "$RELEASE_KEYSTORE_PASSWORD" ] || missing="$missing RELEASE_KEYSTORE_PASSWORD"
+          [ -n "$RELEASE_KEY_ALIAS" ] || missing="$missing RELEASE_KEY_ALIAS"
+          [ -n "$RELEASE_KEY_PASSWORD" ] || missing="$missing RELEASE_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Secret signing belum lengkap:${missing}. Set keempat secret di Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          mkdir -p ci
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > ci/release.keystore
+          if [ ! -s ci/release.keystore ]; then
+            echo "::error::Gagal mendekode RELEASE_KEYSTORE_BASE64 ke ci/release.keystore."
+            exit 1
           fi
 
       # Bukan "npm ci" — project ini belum punya package-lock.json.
@@ -81,6 +77,9 @@ jobs:
         run: |
           npx cap add android
           npx cap sync android
+
+      - name: Pastikan APK tidak membawa WEB_SHEETS_API_KEY
+        run: node scripts/test-secrets-isolation.js --apk-dir android/app/src/main/assets/public
 
       # `npx cap add android` SELALU menulis versionName "1.0" / versionCode 1
       # di android/app/build.gradle, apa pun tag git-nya — langkah "Tentukan versi"
@@ -161,15 +160,19 @@ jobs:
 
       - name: Build Release APK (signed)
         working-directory: android
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
           for attempt in 1 2 3 4; do
             echo "=== Build percobaan ${attempt}/4 ==="
             if ./gradlew assembleRelease \
-              -Pandroid.injected.signing.store.file=${GITHUB_WORKSPACE}/ci/release.keystore \
-              -Pandroid.injected.signing.store.password="${KS_PASS}" \
-              -Pandroid.injected.signing.key.alias="${KS_ALIAS}" \
-              -Pandroid.injected.signing.key.password="${KS_PASS}"; then
+              -Pandroid.injected.signing.store.file="${GITHUB_WORKSPACE}/ci/release.keystore" \
+              -Pandroid.injected.signing.store.password="$RELEASE_KEYSTORE_PASSWORD" \
+              -Pandroid.injected.signing.key.alias="$RELEASE_KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$RELEASE_KEY_PASSWORD"; then
               exit 0
             fi
             if [ "$attempt" -lt 4 ]; then
@@ -180,6 +183,10 @@ jobs:
           done
           echo "Build gagal setelah 4 percobaan."
           exit 1
+
+      - name: Hapus keystore sementara
+        if: always()
+        run: rm -f ci/release.keystore
 
       - name: Rename APK
         run: |

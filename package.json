@@ -6,7 +6,8 @@
   "license": "MIT",
   "scripts": {
     "sync": "cap sync android",
-    "open:android": "cap open android"
+    "open:android": "cap open android",
+    "test": "node scripts/test-secrets-isolation.js"
   },
   "dependencies": {
     "@capacitor/app": "^6.0.0",
